@@ -221,12 +221,20 @@ async def _run_evaluation(
 
 
 async def _create_model_client(model_key: str, temperature: float = 0.7) -> Optional[ModelClient]:
-    """创建模型客户端（优先从数据库读取API Key）"""
+    """创建模型客户端（优先从数据库读取API Key、base_url、model）"""
     import config as cfg
 
     saved_key = await get_setting(f"api_key_{model_key}", "")
+    saved_url = await get_setting(f"base_url_{model_key}", "")
+    saved_model = await get_setting(f"model_{model_key}", "")
+
+    # 用数据库配置覆盖 config
     if saved_key:
         os.environ[cfg.MODELS[model_key]["api_key_env"]] = saved_key
+    if saved_url:
+        cfg.MODELS[model_key]["base_url"] = saved_url
+    if saved_model:
+        cfg.MODELS[model_key]["model"] = saved_model
 
     client = ModelClient(model_key)
     return client

@@ -2,9 +2,32 @@
   <div class="settings">
     <h2 class="page-title">⚙️ 系统设置</h2>
 
+    <!-- ModelVerse 一键配置 -->
+    <el-card style="margin-bottom:20px">
+      <template #header><strong>🚀 ModelVerse 中转平台（推荐）</strong></template>
+      <el-alert type="info" :closable="false" style="margin-bottom:16px">
+        使用 ModelVerse 中转平台，一个 API Key 访问全部 5 个模型，无需单独配置各厂商 API Key
+      </el-alert>
+      <el-descriptions :column="2" border size="small" style="margin-bottom:16px">
+        <el-descriptions-item label="平台地址">{{ mvBaseUrl }}</el-descriptions-item>
+        <el-descriptions-item label="API Key">{{ mvKeyPreview }}</el-descriptions-item>
+        <el-descriptions-item label="支持模型" :span="2">DeepSeek · 文心一言 · 豆包 · Kimi · 通义千问</el-descriptions-item>
+      </el-descriptions>
+      <el-button v-if="!useModelverse" type="primary" @click="enableModelverse" :loading="mvLoading">
+        <el-icon><Connection /></el-icon> 一键启用 ModelVerse
+      </el-button>
+      <el-button v-else type="danger" plain @click="disableModelverse" :loading="mvLoading">
+        <el-icon><SwitchButton /></el-icon> 关闭 ModelVerse，恢复原厂配置
+      </el-button>
+      <el-tag v-if="useModelverse" type="success" style="margin-left:12px" size="large">✓ 已启用</el-tag>
+    </el-card>
+
     <!-- 模型API Key配置 -->
     <el-card style="margin-bottom:20px">
-      <template #header><strong>🔑 模型 API Key 配置</strong></template>
+      <template #header>
+        <strong>🔑 模型 API Key 配置</strong>
+        <el-tag v-if="useModelverse" type="warning" style="margin-left:12px" size="small">当前使用 ModelVerse 中转</el-tag>
+      </template>
       <el-table :data="models" stripe>
         <el-table-column prop="name" label="模型" width="120" />
         <el-table-column prop="model" label="模型ID" width="180" />
@@ -55,13 +78,21 @@ import { ElMessage } from 'element-plus'
 import { apiFetch } from '../composables/useWebSocket'
 
 const models = ref([])
+const useModelverse = ref(false)
+const mvBaseUrl = ref('https://api.modelverse.cn/v1')
+const mvKeyPreview = ref('')
+const mvLoading = ref(false)
 const weights = reactive({ coverage_rate: 0.25, mention_rate: 0.15, citation_rate: 0.15, recommendation_rate: 0.25, sentiment_score: 0.20 })
 const weightLabels = { coverage_rate: '覆盖率', mention_rate: '提及率', citation_rate: '引用率', recommendation_rate: '推荐率', sentiment_score: '情感值' }
 
 async function loadModels() {
   try {
     const res = await apiFetch('/settings/models')
-    models.value = (res.data || []).map(m => ({ ...m, _api_key: '', _show_key: false }))
+    const data = res.data || {}
+    models.value = (data.models || []).map(m => ({ ...m, _api_key: '', _show_key: false }))
+    useModelverse.value = data.use_modelverse || false
+    mvBaseUrl.value = data.modelverse_base_url || mvBaseUrl.value
+    mvKeyPreview.value = data.modelverse_api_key_preview || ''
   } catch (e) { console.error(e) }
 }
 
@@ -70,6 +101,26 @@ async function loadWeights() {
     const res = await apiFetch('/settings/weights')
     if (res.data) Object.assign(weights, res.data)
   } catch (e) { console.error(e) }
+}
+
+async function enableModelverse() {
+  mvLoading.value = true
+  try {
+    const res = await apiFetch('/settings/modelverse/enable', { method: 'POST' })
+    ElMessage.success(res.message || 'ModelVerse 已启用')
+    await loadModels()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { mvLoading.value = false }
+}
+
+async function disableModelverse() {
+  mvLoading.value = true
+  try {
+    const res = await apiFetch('/settings/modelverse/disable', { method: 'POST' })
+    ElMessage.success(res.message || '已恢复原厂配置')
+    await loadModels()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { mvLoading.value = false }
 }
 
 async function saveKey(row) {

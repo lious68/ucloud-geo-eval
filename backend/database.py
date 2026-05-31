@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS geo_scores (
     valid_responses INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS questions (
     id TEXT PRIMARY KEY,
     category TEXT,
@@ -382,3 +388,64 @@ async def get_all_settings() -> Dict[str, str]:
         return {r["key"]: r["value"] for r in rows}
     finally:
         await db.close()
+
+
+# ============ 认证 ============
+
+async def create_session(token: str, hours: int = 24):
+    """创建登录会话"""
+    from datetime import timedelta
+    db = await get_db()
+    try:
+        expires = (datetime.now() + timedelta(hours=hours)).isoformat()
+        await db.execute(
+            "INSERT OR REPLACE INTO admin_sessions (token, created_at, expires_at) VALUES (?, datetime('now'), ?)",
+            (token, expires)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def verify_session(token: str) -> bool:
+    """验证会话token"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT expires_at FROM admin_sessions WHERE token=?",
+            (token,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        from datetime import datetime
+        expires = datetime.fromisoformat(row["expires_at"])
+        if datetime.now() > expires:
+            await db.execute("DELETE FROM admin_sessions WHERE token=?", (token,))
+            await db.commit()
+            return False
+        return True
+    except Exception:
+        return False
+    finally:
+        await db.close()
+
+
+async def delete_session(token: str):
+    """删除会话"""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM admin_sessions WHERE token=?", (token,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_admin_password_hash() -> str:
+    """获取管理员密码hash"""
+    return await get_setting("admin_password_hash", "")
+
+
+async def set_admin_password_hash(hashed: str):
+    """设置管理员密码hash"""
+    await set_setting("admin_password_hash", hashed)

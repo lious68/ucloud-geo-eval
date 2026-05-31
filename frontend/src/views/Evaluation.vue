@@ -12,8 +12,14 @@
           <el-checkbox-group v-model="form.model_keys">
             <el-checkbox v-for="m in models" :key="m.key" :label="m.key">{{ m.name }}
               <el-tag v-if="!m.has_api_key" type="danger" size="small" style="margin-left:4px">未配置</el-tag>
+              <el-tag v-if="m.has_api_key" type="success" size="small" style="margin-left:4px">✓</el-tag>
             </el-checkbox>
           </el-checkbox-group>
+          <div v-if="!models.some(m => m.has_api_key)" style="margin-top:8px">
+            <el-alert type="warning" :closable="false" show-icon>
+              所有模型均未配置 API Key，请先到「系统设置」配置 API Key 或启用 ModelVerse 中转
+            </el-alert>
+          </div>
         </el-form-item>
         <el-form-item label="品类筛选">
           <el-select v-model="form.categories" multiple placeholder="全部品类" style="width:100%">
@@ -27,6 +33,7 @@
           <el-button type="primary" @click="startEval" :disabled="!form.model_keys.length">
             <el-icon><VideoPlay /></el-icon> 开始评测
           </el-button>
+          <span v-if="!form.model_keys.length" style="margin-left:12px;color:#999">请至少选择一个已配置的模型</span>
         </el-form-item>
       </el-form>
     </el-card>
@@ -72,15 +79,31 @@ const form = ref({
 
 async function loadConfig() {
   try {
-    const m = await apiFetch('/settings/models')
-    models.value = m.data || []
+    // 获取模型配置 - 适配新的返回格式
+    const mRes = await apiFetch('/settings/models')
+    const mData = mRes.data || {}
+    models.value = mData.models || mData || []
+    // 自动勾选已配置API Key的模型
     form.value.model_keys = models.value.filter(m => m.has_api_key).map(m => m.key)
-    const c = await apiFetch('/questions/categories')
-    categories.value = c.data || []
-  } catch (e) { console.error(e) }
+
+    // 获取品类（公开接口）
+    const cRes = await apiFetch('/questions/categories')
+    categories.value = cRes.data || []
+  } catch (e) {
+    console.error('loadConfig error:', e)
+  }
 }
 
 async function startEval() {
+  // 过滤掉没有API Key的模型
+  const availableKeys = models.value.filter(m => m.has_api_key).map(m => m.key)
+  const selectedAvailable = form.value.model_keys.filter(k => availableKeys.includes(k))
+
+  if (!selectedAvailable.length) {
+    ElMessage.warning('请选择至少一个已配置API Key的模型')
+    return
+  }
+
   try {
     running.value = true
     logs.value = []
@@ -89,7 +112,12 @@ async function startEval() {
 
     const res = await apiFetch('/evaluations', {
       method: 'POST',
-      body: JSON.stringify(form.value),
+      body: JSON.stringify({
+        name: form.value.name,
+        model_keys: selectedAvailable,
+        categories: form.value.categories.length ? form.value.categories : null,
+        delay: form.value.delay,
+      }),
     })
     runId.value = res.data.run_id
 

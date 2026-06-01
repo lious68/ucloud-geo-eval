@@ -1,6 +1,12 @@
 <template>
   <div class="dashboard">
     <h2 class="page-title">📊 GEO 评估仪表盘</h2>
+    <div v-if="latestRun && route.query.run_id" class="run-breadcrumb">
+      <span>正在查看：</span>
+      <el-tag size="small">{{ latestRun.name || 'GEO评估' }}</el-tag>
+      <span style="color:#999;margin-left:4px">{{ formatRunTime(latestRun.started_at) }}</span>
+      <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史</el-button>
+    </div>
 
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-state">
@@ -427,7 +433,17 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
+import { useRoute } from 'vue-router'
 import { apiFetch } from '../composables/useWebSocket'
+
+const route = useRoute()
+
+function formatRunTime(ts) {
+  if (!ts) return ''
+  try {
+    return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  } catch { return ts }
+}
 
 const scores = ref([])
 const charts = ref({})
@@ -644,14 +660,25 @@ function renderChart(domRef, option) {
 async function loadData() {
   loading.value = true
   try {
-    const runsRes = await apiFetch('/evaluations?limit=1')
-    const runs = runsRes.data || []
-    if (!runs.length) {
-      loading.value = false
-      return
+    // 优先使用 query param 中的 run_id（从历史页跳转过来）
+    const queryRunId = route.query.run_id
+    let runId = null
+
+    if (queryRunId) {
+      runId = queryRunId
+      // 补充 latestRun 信息
+      const runRes = await apiFetch(`/evaluations/${runId}`)
+      latestRun.value = runRes.data || null
+    } else {
+      const runsRes = await apiFetch('/evaluations?limit=1')
+      const runs = runsRes.data || []
+      if (!runs.length) {
+        loading.value = false
+        return
+      }
+      latestRun.value = runs[0]
+      runId = runs[0].id
     }
-    latestRun.value = runs[0]
-    const runId = runs[0].id
 
     const scoresRes = await apiFetch(`/results/${runId}/scores`)
     scores.value = scoresRes.data || []
@@ -739,6 +766,7 @@ onMounted(loadData)
 <style scoped>
 .page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
 .section-title { font-size: 16px; font-weight: 600; color: #1a1a2e; margin-bottom: 14px; padding-left: 2px; }
+.run-breadcrumb { font-size: 13px; color: #666; margin-bottom: 16px; display: flex; align-items: center; }
 
 /* 加载/空状态 */
 .loading-state { text-align: center; padding: 80px 0; color: #999; }

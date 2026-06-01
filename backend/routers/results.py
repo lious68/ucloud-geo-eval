@@ -1,4 +1,5 @@
 """结果查询路由"""
+import json
 from fastapi import APIRouter, HTTPException, Query
 import database as db
 from services.chart_builder import (
@@ -74,6 +75,167 @@ async def get_charts(run_id: str):
         "heatmap": build_heatmap_option(all_cat_scores) if all_cat_scores else {},
     }
     return {"success": True, "data": charts}
+
+
+@router.get("/{run_id}/citations")
+async def get_citation_details(run_id: str, model_key: str = None):
+    """获取引用详情：哪些问题产生了UCloud引用，及具体引用内容
+
+    仅返回 has_citation=1 的记录（贡献了GEO引用率的）
+    """
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    all_results = await db.get_results(run_id, model_key)
+
+    # 按模型分组
+    by_model = {}
+    for r in all_results:
+        # 仅保留有UCloud引用的记录
+        if not r.get("has_citation"):
+            continue
+
+        mk = r["model_key"]
+        if mk not in by_model:
+            by_model[mk] = {"model_name": r.get("model_name", mk), "citation_questions": []}
+
+        # 解析 citations JSON
+        citations_raw = r.get("citations", "[]")
+        if isinstance(citations_raw, str):
+            try:
+                citations_list = json.loads(citations_raw)
+            except (json.JSONDecodeError, TypeError):
+                citations_list = []
+        elif isinstance(citations_raw, list):
+            citations_list = citations_raw
+        else:
+            citations_list = []
+
+        by_model[mk]["citation_questions"].append({
+            "question_id": r["question_id"],
+            "question_text": "",  # 后续关联 questions 表补充
+            "citations": citations_list,
+        })
+
+    # 关联 questions 表补充问题文本
+    db_conn = await db.get_db()
+    try:
+        for mk_data in by_model.values():
+            for q in mk_data["citation_questions"]:
+                cursor = await db_conn.execute(
+                    "SELECT question FROM questions WHERE id=?", (q["question_id"],)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    q["question_text"] = row["question"]
+    finally:
+        await db_conn.close()
+
+    return {"success": True, "data": by_model}
+
+
+@router.get("/{run_id}/citation-channels")
+async def get_citation_channel_clustering(run_id: str, model_key: str = None):
+    """引用来源渠道聚类统计
+
+    仅统计 ucloud_mentioned=1 的响应中的URL（对GEO评分有贡献），
+    按 URL 域名的来源渠道聚类汇总
+    """
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    all_results = await db.get_results(run_id, model_key)
+
+    by_model = {}
+    for r in all_results:
+        # 仅统计UCloud被提及的响应（对GEO评分有贡献）
+        if not r.get("ucloud_mentioned"):
+            continue
+
+        mk = r["model_key"]
+        if mk not in by_model:
+            by_model[mk] = {
+                "model_name": r.get("model_name", mk),
+                "channels": {},  # channel_name -> {count, sample_urls}
+            }
+
+        # 解析 all_cited_urls JSON
+        urls_raw = r.get("all_cited_urls", "[]")
+        if isinstance(urls_raw, str):
+            try:
+                urls_list = json.loads(urls_raw)
+            except (json.JSONDecodeError, TypeError):
+                urls_list = []
+        elif isinstance(urls_raw, list):
+            urls_list = urls_raw
+        else:
+            urls_list = []
+
+        for url_info in urls_list:
+            if url_info.get("citation_type") != "url":
+                continue
+            channel = url_info.get("source_channel", "其他") or "其他"
+            url_content = url_info.get("content", "")
+
+            if channel not in by_model[mk]["channels"]:
+                by_model[mk]["channels"][channel] = {"count": 0, "sample_urls": []}
+            by_model[mk]["channels"][channel]["count"] += 1
+            # 最多保留5个示例URL
+            if len(by_model[mk]["channels"][channel]["sample_urls"]) < 5:
+                by_model[mk]["channels"][channel]["sample_urls"].append(url_content)
+
+        # 也统计 citations 中 UCloud 的引用
+        cits_raw = r.get("citations", "[]")
+        if isinstance(cits_raw, str):
+            try:
+                cits_list = json.loads(cits_raw)
+            except (json.JSONDecodeError, TypeError):
+                cits_list = []
+        elif isinstance(cits_raw, list):
+            cits_list = cits_raw
+        else:
+            cits_list = []
+
+        for cit in cits_list:
+            if cit.get("citation_type") != "url":
+                continue
+            channel = cit.get("source_channel", "其他") or "其他"
+            url_content = cit.get("content", "")
+
+            # UCloud引用可能在 all_cited_urls 中被跳过了（位置去重），这里补上
+            # 检查是否已统计
+            existing_urls = by_model[mk]["channels"].get(channel, {}).get("sample_urls", [])
+            if channel not in by_model[mk]["channels"]:
+                by_model[mk]["channels"][channel] = {"count": 0, "sample_urls": []}
+            # 避免重复计数：通过URL内容去重
+            if url_content not in existing_urls or by_model[mk]["channels"][channel]["count"] == 0:
+                by_model[mk]["channels"][channel]["count"] += 1
+                if len(by_model[mk]["channels"][channel]["sample_urls"]) < 5 and url_content not in existing_urls:
+                    by_model[mk]["channels"][channel]["sample_urls"].append(url_content)
+
+    # 转换 channels dict 为列表并排序
+    for mk_data in by_model.values():
+        channels_list = [
+            {"channel": ch, "count": info["count"], "sample_urls": info["sample_urls"]}
+            for ch, info in mk_data["channels"].items()
+        ]
+        channels_list.sort(key=lambda x: x["count"], reverse=True)
+        mk_data["channels"] = channels_list
+
+    return {"success": True, "data": by_model}
+
+
+@router.post("/{run_id}/backfill-citations")
+async def backfill_citations(run_id: str):
+    """从 raw_content 重新提取引用详情并回填 citations/all_cited_urls 列"""
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    count = await db.backfill_citations(run_id)
+    return {"success": True, "data": {"backfilled": count}}
 
 
 @router.get("/compare")

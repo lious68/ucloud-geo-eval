@@ -263,6 +263,68 @@
           <el-card><div ref="sentimentRef" style="height:400px"></div></el-card>
         </el-col>
       </el-row>
+
+      <!-- 引用详情（贡献GEO得分的引用） -->
+      <div class="citation-section" style="margin-top:20px" v-if="hasCitationData">
+        <h3 class="section-title">📎 引用详情（贡献 GEO 得分的引用）</h3>
+        <el-card>
+          <el-collapse v-model="activeCitationPanels">
+            <el-collapse-item v-for="(data, mk) in citationDetails" :key="mk" :name="mk">
+              <template #title>
+                <span class="collapse-title">{{ data.model_name }}</span>
+                <el-tag size="small" type="info" style="margin-left:8px">{{ data.citation_questions.length }} 条引用</el-tag>
+              </template>
+              <el-table :data="data.citation_questions" stripe size="small" style="width:100%">
+                <el-table-column label="问题" min-width="200">
+                  <template #default="{ row }">
+                    <span class="question-text">{{ row.question_text || row.question_id }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="引用内容" min-width="300">
+                  <template #default="{ row }">
+                    <div v-for="(cit, ci) in row.citations" :key="ci" class="citation-item">
+                      <el-tag v-if="cit.citation_type === 'url'" size="small" type="success" class="cit-type-tag">URL</el-tag>
+                      <el-tag v-else size="small" type="warning" class="cit-type-tag">文本引用</el-tag>
+                      <a v-if="cit.citation_type === 'url'" :href="cit.content" target="_blank" class="citation-url">{{ cit.content }}</a>
+                      <span v-else class="citation-ref">{{ cit.content }}</span>
+                      <el-tag v-if="cit.source_channel" size="small" type="info" class="cit-channel-tag">{{ cit.source_channel }}</el-tag>
+                    </div>
+                    <span v-if="!row.citations || !row.citations.length" style="color:#999">—</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-collapse-item>
+          </el-collapse>
+        </el-card>
+      </div>
+
+      <!-- 引用来源渠道聚类统计 -->
+      <div class="channel-clustering-section" style="margin-top:20px" v-if="hasChannelData">
+        <h3 class="section-title">📊 引用来源渠道聚类统计</h3>
+        <el-row :gutter="16">
+          <el-col :span="14">
+            <el-card>
+              <div ref="channelChartRef" style="height:350px"></div>
+            </el-card>
+          </el-col>
+          <el-col :span="10">
+            <el-card>
+              <template #header><strong>渠道 × 模型 引用矩阵</strong></template>
+              <el-table :data="channelMatrixData" stripe size="small" style="width:100%">
+                <el-table-column prop="channel" label="来源渠道" width="110" fixed />
+                <el-table-column v-for="col in channelMatrixCols" :key="col" :label="col" width="80" align="center">
+                  <template #default="{ row }">{{ row[col] || 0 }}</template>
+                </el-table-column>
+                <el-table-column label="合计" width="70" align="center">
+                  <template #default="{ row }">
+                    <strong>{{ channelMatrixCols.reduce((s, c) => s + (row[c] || 0), 0) }}</strong>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+          </el-col>
+        </el-row>
+      </div>
     </template>
   </div>
 </template>
@@ -277,6 +339,48 @@ const charts = ref({})
 const latestRun = ref(null)
 const loading = ref(true)
 const hasData = computed(() => scores.value.length > 0)
+
+// 引用详情 & 渠道聚类
+const citationDetails = ref({})
+const channelClustering = ref({})
+const activeCitationPanels = ref([])
+const channelChartRef = ref(null)
+
+const hasCitationData = computed(() => Object.keys(citationDetails.value).length > 0)
+const hasChannelData = computed(() => Object.keys(channelClustering.value).length > 0)
+
+// 渠道聚类矩阵数据（用于表格）
+const channelMatrixCols = computed(() => {
+  const names = new Set()
+  for (const mk in channelClustering.value) {
+    names.add(channelClustering.value[mk].model_name)
+  }
+  return [...names]
+})
+
+const channelMatrixData = computed(() => {
+  // 收集所有渠道名
+  const channelSet = new Set()
+  for (const mk in channelClustering.value) {
+    for (const ch of channelClustering.value[mk].channels) {
+      channelSet.add(ch.channel)
+    }
+  }
+  // 构建矩阵行
+  return [...channelSet].map(channel => {
+    const row = { channel }
+    for (const mk in channelClustering.value) {
+      const mn = channelClustering.value[mk].model_name
+      const found = channelClustering.value[mk].channels.find(c => c.channel === channel)
+      row[mn] = found ? found.count : 0
+    }
+    return row
+  }).sort((a, b) => {
+    const totalA = channelMatrixCols.value.reduce((s, c) => s + (a[c] || 0), 0)
+    const totalB = channelMatrixCols.value.reduce((s, c) => s + (b[c] || 0), 0)
+    return totalB - totalA
+  })
+})
 
 const radarRef = ref(null), barRef = ref(null), coverageRef = ref(null), sentimentRef = ref(null)
 
@@ -387,11 +491,12 @@ async function loadData() {
       return
     }
     latestRun.value = runs[0]
+    const runId = runs[0].id
 
-    const scoresRes = await apiFetch(`/results/${runs[0].id}/scores`)
+    const scoresRes = await apiFetch(`/results/${runId}/scores`)
     scores.value = scoresRes.data || []
 
-    const chartsRes = await apiFetch(`/results/${runs[0].id}/charts`)
+    const chartsRes = await apiFetch(`/results/${runId}/charts`)
     charts.value = chartsRes.data || {}
 
     loading.value = false
@@ -401,10 +506,71 @@ async function loadData() {
     if (charts.value.bar) renderChart(barRef.value, charts.value.bar)
     if (charts.value.coverage) renderChart(coverageRef.value, charts.value.coverage)
     if (charts.value.sentiment) renderChart(sentimentRef.value, charts.value.sentiment)
+
+    // 加载引用详情和渠道聚类（不阻塞主面板渲染）
+    try {
+      const citationsRes = await apiFetch(`/results/${runId}/citations`)
+      citationDetails.value = citationsRes.data || {}
+      // 默认展开第一个面板
+      const keys = Object.keys(citationDetails.value)
+      if (keys.length) activeCitationPanels.value = [keys[0]]
+    } catch (e) { console.warn('Citations load error:', e) }
+
+    try {
+      const channelsRes = await apiFetch(`/results/${runId}/citation-channels`)
+      channelClustering.value = channelsRes.data || {}
+      await nextTick()
+      renderChannelChart()
+    } catch (e) { console.warn('Citation channels load error:', e) }
   } catch (e) {
     console.error('Dashboard loadData error:', e)
     loading.value = false
   }
+}
+
+function renderChannelChart() {
+  if (!channelChartRef.value) return
+  const data = channelClustering.value
+  const models = Object.keys(data)
+  if (!models.length) return
+
+  // 收集所有渠道
+  const channelSet = new Set()
+  for (const mk of models) {
+    for (const ch of data[mk].channels) {
+      channelSet.add(ch.channel)
+    }
+  }
+  const channels = [...channelSet]
+
+  // 颜色池
+  const palette = ['#409eff','#67c23a','#e6a23c','#f56c6c','#909399','#9b59b6','#1abc9c','#e74c3c','#3498db','#f39c12']
+
+  const series = channels.map((channel, idx) => ({
+    name: channel,
+    type: 'bar',
+    stack: 'total',
+    data: models.map(mk => {
+      const found = data[mk].channels.find(c => c.channel === channel)
+      return found ? found.count : 0
+    }),
+    itemStyle: { color: palette[idx % palette.length] },
+    emphasis: { focus: 'series' },
+  }))
+
+  const option = {
+    title: { text: '引用来源渠道分布', left: 'center', top: 5, textStyle: { fontSize: 14 } },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { bottom: 0, type: 'scroll' },
+    grid: { left: 80, right: 20, top: 40, bottom: 60 },
+    xAxis: { type: 'value', name: '引用次数' },
+    yAxis: { type: 'category', data: models.map(mk => data[mk].model_name) },
+    series,
+  }
+
+  const chart = echarts.init(channelChartRef.value)
+  chart.setOption(option)
+  window.addEventListener('resize', () => chart.resize())
 }
 
 onMounted(loadData)
@@ -483,4 +649,17 @@ onMounted(loadData)
 .intro-icon { font-size: 20px; }
 .intro-label { font-size: 14px; font-weight: 600; color: #1a1a2e; }
 .intro-desc { font-size: 12px; color: #999; line-height: 1.5; }
+
+/* ===== 引用详情区 ===== */
+.collapse-title { font-weight: 600; font-size: 14px; color: #1a1a2e; }
+.question-text { font-size: 13px; color: #333; }
+.citation-item { margin-bottom: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cit-type-tag { flex-shrink: 0; }
+.cit-channel-tag { flex-shrink: 0; }
+.citation-url { color: #409eff; text-decoration: none; font-size: 12px; word-break: break-all; }
+.citation-url:hover { text-decoration: underline; }
+.citation-ref { font-size: 12px; color: #666; background: #f5f7fa; padding: 1px 6px; border-radius: 3px; }
+
+/* ===== 渠道聚类区 ===== */
+.channel-clustering-section .el-card { height: 100%; }
 </style>

@@ -260,6 +260,14 @@ def _analysis_to_dict(a) -> Dict:
         "raw_content": a.raw_content,
         "competitor_mentions": {k: [{"keyword": m.keyword, "position": m.position} for m in v]
                                 for k, v in a.competitor_mentions.items()},
+        "citations": [{"citation_type": c.citation_type, "content": c.content,
+                        "position": c.position, "source_channel": c.source_channel,
+                        "is_ucloud": c.is_ucloud}
+                       for c in a.citations],
+        "all_cited_urls": [{"citation_type": c.citation_type, "content": c.content,
+                            "position": c.position, "source_channel": c.source_channel,
+                            "is_ucloud": c.is_ucloud}
+                           for c in a.all_cited_urls],
         "error_message": a.error_message,
     }
 
@@ -305,6 +313,8 @@ def _empty_result(question_id: str, model_key: str, error: str) -> Dict:
         "response_length": 0,
         "raw_content": "",
         "competitor_mentions": {},
+        "citations": [],
+        "all_cited_urls": [],
         "error_message": error,
     }
 

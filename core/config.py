@@ -190,6 +190,113 @@ SCORE_CONFIG = {
 }
 
 # ============================================================
+# 引用来源渠道映射（URL域名 → 渠道中文名）
+# ============================================================
+URL_CHANNEL_MAPPING = {
+    # UCloud 官方
+    "ucloud.cn": "UCloud官网",
+    "ucloud.com": "UCloud国际站",
+    "ucloudstack.com": "UCloudStack",
+    "compshare.com": "UCloud算力共享",
+    # 技术社区
+    "zhihu.com": "知乎",
+    "zhuanlan.zhihu.com": "知乎专栏",
+    "csdn.net": "CSDN",
+    "blog.csdn.net": "CSDN博客",
+    "juejin.cn": "掘金",
+    "segmentfault.com": "思否",
+    "jianshu.com": "简书",
+    "cnblogs.com": "博客园",
+    "infoq.cn": "InfoQ",
+    "oscimg.com": "开源中国",
+    "oschina.net": "开源中国",
+    # 搜索引擎
+    "bing.com": "Bing",
+    "google.com": "Google",
+    "google.cn": "Google中国",
+    "baidu.com": "百度",
+    "baike.baidu.com": "百度百科",
+    "zhihu.baidu.com": "百度知乎",
+    # 云厂商
+    "aliyun.com": "阿里云",
+    "cloud.tencent.com": "腾讯云",
+    "tencent.com": "腾讯",
+    "huaweicloud.com": "华为云",
+    "volcengine.com": "火山引擎",
+    "aws.amazon.com": "AWS",
+    "amazon.com": "Amazon",
+    "azure.microsoft.com": "Azure",
+    "cloud.google.com": "Google Cloud",
+    # 社交/媒体
+    "weibo.com": "微博",
+    "mp.weixin.qq.com": "微信公众号",
+    "wechat.com": "微信",
+    "bilibili.com": "B站",
+    "douyin.com": "抖音",
+    "xiaohongshu.com": "小红书",
+    "36kr.com": "36氪",
+    "thepaper.cn": "澎湃新闻",
+    "jiemian.com": "界面新闻",
+    "caixin.com": "财新",
+    # 文档/百科/代码
+    "wikipedia.org": "维基百科",
+    "github.com": "GitHub",
+    "gitee.com": "Gitee",
+    "stackoverflow.com": "StackOverflow",
+    "readthedocs.io": "ReadTheDocs",
+    "docs.rs": "Docs.rs",
+    "npmjs.com": "NPM",
+    "pypi.org": "PyPI",
+    # AI 平台
+    "perplexity.ai": "Perplexity",
+    "chat.openai.com": "ChatGPT",
+    "openai.com": "OpenAI",
+    "moonshot.cn": "Moonshot",
+    "doubao.com": "豆包",
+    "tongyi.aliyun.com": "通义千问",
+    "yiyan.baidu.com": "文心一言",
+    # 企业信息
+    "tianyancha.com": "天眼查",
+    "qcc.com": "企查查",
+    "cninfo.com.cn": "巨潮资讯",
+    "eastmoney.com": "东方财富",
+}
+DEFAULT_CHANNEL = "其他"
+
+
+def resolve_channel(url: str) -> str:
+    """从 URL 解析来源渠道名称
+
+    逻辑: 提取域名 → 先精确匹配 → 再取父域名匹配 → 兜底'其他'
+    """
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        # 去掉端口
+        if ":" in domain:
+            domain = domain.split(":")[0]
+        # 去掉 www.
+        if domain.startswith("www."):
+            domain = domain[4:]
+
+        # 精确匹配（优先匹配更长/更具体的域名）
+        if domain in URL_CHANNEL_MAPPING:
+            return URL_CHANNEL_MAPPING[domain]
+
+        # 父域名匹配：逐级去掉子域名
+        parts = domain.split(".")
+        for i in range(1, len(parts)):
+            parent = ".".join(parts[i:])
+            if parent in URL_CHANNEL_MAPPING:
+                return URL_CHANNEL_MAPPING[parent]
+
+        return DEFAULT_CHANNEL
+    except Exception:
+        return DEFAULT_CHANNEL
+
+
+# ============================================================
 # 输出配置
 # ============================================================
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")

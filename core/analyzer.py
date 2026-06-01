@@ -27,6 +27,8 @@ class CitationInfo:
     citation_type: str     # url / reference
     content: str           # 引用内容
     position: int          # 位置
+    source_channel: str = ""   # 来源渠道（仅url类型，如"UCloud官网"、"知乎"等）
+    is_ucloud: bool = False    # 是否为UCloud相关引用
 
 
 @dataclass
@@ -64,6 +66,9 @@ class AnalysisResult:
     has_citation: bool = False
     citations: List[CitationInfo] = field(default_factory=list)
     citation_count: int = 0
+
+    # 所有被引用的URL（含非UCloud的，用于来源渠道聚类）
+    all_cited_urls: List[CitationInfo] = field(default_factory=list)
 
     # 推荐
     has_recommendation: bool = False
@@ -206,12 +211,14 @@ class ResponseAnalyzer:
             pattern = re.compile(pattern_str)
             for match in pattern.finditer(content):
                 pos = match.start()
-                context_start = max(0, pos - 30)
-                context_end = min(len(content), match.end() + 30)
+                url = match.group()
+                from config import resolve_channel
                 result.citations.append(CitationInfo(
                     citation_type="url",
-                    content=match.group(),
+                    content=url,
                     position=pos,
+                    source_channel=resolve_channel(url),
+                    is_ucloud=True,
                 ))
 
         # 2. 检测参考引用关键词
@@ -219,16 +226,18 @@ class ResponseAnalyzer:
             pattern = re.compile(re.escape(keyword))
             for match in pattern.finditer(content):
                 pos = match.start()
-                context_start = max(0, pos - 30)
-                context_end = min(len(content), match.end() + 30)
                 result.citations.append(CitationInfo(
                     citation_type="reference",
                     content=match.group(),
                     position=pos,
+                    is_ucloud=True,
                 ))
 
         result.has_citation = len(result.citations) > 0
         result.citation_count = len(result.citations)
+
+        # 3. 检测所有URL（用于来源渠道聚类统计）
+        self._detect_all_urls(content, result)
 
     def _detect_recommendations(self, content: str, result: AnalysisResult):
         """检测推荐信息"""
@@ -423,3 +432,39 @@ class ResponseAnalyzer:
             if brand == "UCloud":
                 result.ucloud_rank = rank
                 break
+
+    def _detect_all_urls(self, content: str, result: AnalysisResult):
+        """检测响应中所有URL，标注来源渠道（用于引用来源渠道聚类统计）"""
+        from config import resolve_channel
+
+        # 通用URL正则
+        url_pattern = re.compile(r'https?://[^\s<>"\')\]，。、；：！？】}]+')
+        seen_positions = set()
+
+        # 先标记已有UCloud引用的位置，避免重复
+        for c in result.citations:
+            if c.citation_type == "url":
+                seen_positions.add(c.position)
+
+        for match in url_pattern.finditer(content):
+            pos = match.start()
+            url = match.group().rstrip(".,;:!?)]}>》）】")
+
+            # 跳过已作为UCloud引用收录的URL
+            if pos in seen_positions:
+                # 但需要补充source_channel到已有的UCloud引用
+                for c in result.citations:
+                    if c.citation_type == "url" and c.position == pos and not c.source_channel:
+                        c.source_channel = resolve_channel(url)
+                continue
+
+            channel = resolve_channel(url)
+            is_uc = channel.startswith("UCloud") or "ucloud" in url.lower()
+
+            result.all_cited_urls.append(CitationInfo(
+                citation_type="url",
+                content=url,
+                position=pos,
+                source_channel=channel,
+                is_ucloud=is_uc,
+            ))

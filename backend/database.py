@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     raw_content TEXT DEFAULT '',
     competitor_mentions TEXT DEFAULT '{}',
     error_message TEXT,
+    citations TEXT DEFAULT '[]',
+    all_cited_urls TEXT DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -103,6 +105,9 @@ async def init_db():
         await db.executescript(SCHEMA_SQL)
         await db.commit()
 
+        # 迁移：添加 citations 和 all_cited_urls 列
+        await _migrate_add_columns(db)
+
         # 检查是否已有问题数据
         cursor = await db.execute("SELECT COUNT(*) FROM questions")
         count = (await cursor.fetchone())[0]
@@ -110,6 +115,16 @@ async def init_db():
             await _import_default_questions(db)
     finally:
         await db.close()
+
+
+async def _migrate_add_columns(db: aiosqlite.Connection):
+    """安全添加新列（兼容已有数据库）"""
+    for col in ["citations", "all_cited_urls"]:
+        try:
+            await db.execute(f"ALTER TABLE analysis_results ADD COLUMN {col} TEXT DEFAULT '[]'")
+            await db.commit()
+        except aiosqlite.OperationalError:
+            pass  # 列已存在
 
 
 async def _import_default_questions(db: aiosqlite.Connection):
@@ -223,8 +238,9 @@ async def save_analysis_result(run_id: str, result: Dict):
                 has_citation, citation_count,
                 ucloud_recommended, recommendation_strength,
                 sentiment_score, sentiment_label, position_weight,
-                response_length, raw_content, competitor_mentions, error_message)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                response_length, raw_content, competitor_mentions, error_message,
+                citations, all_cited_urls)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, result["question_id"], result["model_key"], result["model_name"],
              int(result["ucloud_mentioned"]), result["ucloud_mention_count"], result.get("ucloud_rank"),
              int(result["has_citation"]), result["citation_count"],
@@ -232,7 +248,9 @@ async def save_analysis_result(run_id: str, result: Dict):
              result["sentiment_score"], result["sentiment_label"], result["position_weight"],
              result["response_length"], result.get("raw_content", ""),
              json.dumps(result.get("competitor_mentions", {}), ensure_ascii=False),
-             result.get("error_message"))
+             result.get("error_message"),
+             json.dumps(result.get("citations", []), ensure_ascii=False),
+             json.dumps(result.get("all_cited_urls", []), ensure_ascii=False))
         )
         await db.commit()
     finally:
@@ -449,3 +467,60 @@ async def get_admin_password_hash() -> str:
 async def set_admin_password_hash(hashed: str):
     """设置管理员密码hash"""
     await set_setting("admin_password_hash", hashed)
+
+
+async def backfill_citations(run_id: str) -> int:
+    """从 raw_content 重新提取引用详情并回填 citations/all_cited_urls 列
+
+    返回回填的记录数
+    """
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+    from analyzer import ResponseAnalyzer, AnalysisResult
+
+    db = await get_db()
+    analyzer = ResponseAnalyzer()
+    count = 0
+    try:
+        cursor = await db.execute(
+            "SELECT id, raw_content FROM analysis_results WHERE run_id=? AND raw_content != ''",
+            (run_id,)
+        )
+        rows = await cursor.fetchall()
+
+        for row in rows:
+            content = row["raw_content"]
+            if not content:
+                continue
+
+            # 重新运行引用检测
+            result = AnalysisResult(question_id="", model_key="", model_name="")
+            result.raw_content = content
+            analyzer._detect_citations(content, result)
+
+            citations_json = json.dumps(
+                [{"citation_type": c.citation_type, "content": c.content,
+                  "position": c.position, "source_channel": c.source_channel,
+                  "is_ucloud": c.is_ucloud}
+                 for c in result.citations],
+                ensure_ascii=False
+            )
+            all_urls_json = json.dumps(
+                [{"citation_type": c.citation_type, "content": c.content,
+                  "position": c.position, "source_channel": c.source_channel,
+                  "is_ucloud": c.is_ucloud}
+                 for c in result.all_cited_urls],
+                ensure_ascii=False
+            )
+
+            await db.execute(
+                "UPDATE analysis_results SET citations=?, all_cited_urls=? WHERE id=?",
+                (citations_json, all_urls_json, row["id"])
+            )
+            count += 1
+
+        await db.commit()
+    finally:
+        await db.close()
+
+    return count

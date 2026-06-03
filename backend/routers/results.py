@@ -260,7 +260,7 @@ async def get_question_drilldown(run_id: str, model_key: str):
         denom = 1  # 每题每个模型只回答一次
         coverage_num = 1 if r.get("ucloud_mentioned") and not has_error else 0
         citation_num = 1 if r.get("has_citation") and not has_error else 0
-        recommend_num = 1 if r.get("ucloud_recommended") and not has_error else 0
+        recommend_num = 1 if r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3 and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
 
         # 回答摘要

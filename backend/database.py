@@ -312,8 +312,32 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
         else:
             query += " AND category IS NULL"
         cursor = await db.execute(query, params)
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        rows = [dict(r) for r in await cursor.fetchall()]
+
+        # recommendation_rate 当前用于仪表盘的“TOP3 推荐率”：
+        # UCloud 进入品牌推荐列表 Top3 的有效回答数 / 有效回答总数。
+        # 基于 analysis_results 动态回填，历史评测无需重跑也能按新口径展示。
+        for row in rows:
+            top3_query = """
+                SELECT
+                    COUNT(*) AS valid_count,
+                    SUM(CASE WHEN ucloud_rank IS NOT NULL AND ucloud_rank <= 3 THEN 1 ELSE 0 END) AS top3_count
+                FROM analysis_results
+                WHERE run_id=? AND model_key=? AND (error_message IS NULL OR error_message='')
+            """
+            top3_params = [run_id, row["model_key"]]
+            if row.get("category"):
+                top3_query += " AND question_id IN (SELECT id FROM questions WHERE category=?)"
+                top3_params.append(row["category"])
+
+            top3_cursor = await db.execute(top3_query, top3_params)
+            top3_row = await top3_cursor.fetchone()
+            valid_count = top3_row["valid_count"] if top3_row else 0
+            top3_count = top3_row["top3_count"] if top3_row else 0
+            if valid_count:
+                row["recommendation_rate"] = round((top3_count or 0) / valid_count, 4)
+
+        return rows
     finally:
         await db.close()
 

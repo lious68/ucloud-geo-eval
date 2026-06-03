@@ -95,9 +95,9 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分 - 计算公式</div>
-                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + TOP3 推荐率×25% + 情感值×20%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘以100转换为0-100分制</div>
-                      <div class="formula-weight">加权系数: 提及率25%、引用率15%、推荐率25%、情感值20%</div>
+                      <div class="formula-weight">加权系数: 提及率25%、引用率15%、TOP3 推荐率25%、情感值20%</div>
                     </div>
                   </template>
                   <span class="formula-trigger">ⓘ</span>
@@ -130,7 +130,7 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分</div>
-                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + TOP3 推荐率×25% + 情感值×20%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘100转为0-100分制</div>
                     </div>
                   </template>
@@ -183,14 +183,14 @@
             </el-table-column>
             <el-table-column width="120">
               <template #header>
-                <span>推荐率</span>
+                <span>TOP3 推荐率</span>
                 <el-tooltip placement="top" effect="light" :width="320">
                   <template #content>
                     <div class="formula-tooltip">
-                      <div class="formula-title">推荐率 Recommendation Rate</div>
-                      <div class="formula-expr">推荐率 = UCloud被推荐的响应数 / 有效响应总数</div>
-                      <div class="formula-desc">AI明确推荐UCloud作为首选或备选方案的响应占比</div>
-                      <div class="formula-example">强推荐=明确首推UCloud，中等推荐=列入推荐列表，弱推荐=顺带提及</div>
+                      <div class="formula-title">TOP3 推荐率 Top3 Recommendation Rate</div>
+                      <div class="formula-expr">TOP3 推荐率 = 品牌进入 Top3 的回答次数 / 有效回答总次数</div>
+                      <div class="formula-desc">统计 UCloud 在回答中进入品牌推荐列表 Top3 的比例</div>
+                      <div class="formula-example">48条有效回答中有12条进入Top3 → 12/48 = 25.0%</div>
                       <div class="formula-weight">GEO权重: 25%</div>
                     </div>
                   </template>
@@ -339,7 +339,7 @@
               <el-option label="全部指标" value="all" />
               <el-option label="提及率" value="coverage" />
               <el-option label="引用率" value="citation" />
-              <el-option label="推荐率" value="recommendation" />
+              <el-option label="TOP3 推荐率" value="recommendation" />
               <el-option label="情感值" value="sentiment" />
             </el-select>
             <el-select v-model="filterCondition" placeholder="条件" size="small" style="width:120px;margin-left:8px" v-if="filterMetric !== 'all'">
@@ -380,14 +380,9 @@
                 <span :class="row.metrics.citation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.citation.value }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="推荐率" width="90" sortable :sort-method="(a,b) => a.metrics.recommendation.numerator - b.metrics.recommendation.numerator">
+            <el-table-column label="TOP3 推荐率" width="120" sortable :sort-method="(a,b) => a.metrics.recommendation.numerator - b.metrics.recommendation.numerator">
               <template #default="{ row }">
                 <span :class="row.metrics.recommendation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.recommendation.value }}</span>
-                <el-tag v-if="row.metrics.recommendation.strength !== 'none'" size="small"
-                  :type="row.metrics.recommendation.strength === 'strong' ? 'danger' : 'warning'"
-                  style="margin-left:4px;font-size:10px">
-                  {{ row.metrics.recommendation.strength === 'strong' ? '强' : '中' }}
-                </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="情感" width="80" sortable :sort-method="(a,b) => a.metrics.sentiment.score - b.metrics.sentiment.score">
@@ -483,7 +478,7 @@ const filterMetric = ref('all')
 const filterCondition = ref('all')
 
 const filterMetricLabel = computed(() => {
-  const map = { coverage: '提及率', citation: '引用率', recommendation: '推荐率', sentiment: '情感值' }
+  const map = { coverage: '提及率', citation: '引用率', recommendation: 'TOP3 推荐率', sentiment: '情感值' }
   return map[filterMetric.value] || ''
 })
 
@@ -566,11 +561,11 @@ const metricDefinitions = [
     weight: 15,
   },
   {
-    key: 'recommendation_rate', label: '推荐率', icon: '👍',
-    brief: 'UCloud被推荐的响应比例',
-    formula: '推荐率 = UCloud被推荐的响应数 / 有效响应总数',
-    description: 'AI明确推荐UCloud作为首选或备选方案的响应占比，含强推荐/中等推荐/弱推荐',
-    example: '强推荐=明确首推UCloud，中等推荐=将UCloud列入推荐列表',
+    key: 'recommendation_rate', label: 'TOP3 推荐率', icon: '👍',
+    brief: '品牌进入 Top3 的回答比例',
+    formula: 'TOP3 推荐率 = 品牌进入 Top3 的回答次数 / 有效回答总次数',
+    description: '统计 UCloud 在回答中进入品牌推荐列表 Top3 的比例',
+    example: '如48条有效回答中有12条进入Top3，则TOP3推荐率=12/48=25.0%',
     weight: 25,
   },
   {

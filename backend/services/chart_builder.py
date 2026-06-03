@@ -7,7 +7,7 @@ from typing import Dict, List, Any
 
 def build_radar_option(scores_list: List[Dict]) -> Dict:
     """雷达图：4维指标对比"""
-    categories = ["提及率", "引用率", "推荐率", "情感值"]
+    categories = ["提及率", "引用率", "TOP3 推荐率", "情感值"]
     colors = ["#0f3460", "#e94560", "#533483", "#f5a623", "#7ed321"]
 
     series_data = []
@@ -62,14 +62,14 @@ def build_bar_option(scores_list: List[Dict]) -> Dict:
 
 
 def build_coverage_option(scores_list: List[Dict]) -> Dict:
-    """分组柱状图：提及率/引用率/推荐率"""
+    """分组柱状图：提及率/引用率/TOP3推荐率"""
     colors = ["#0f3460", "#e94560", "#533483"]
     names = [s["model_name"] for s in scores_list]
 
     return {
         "title": {"text": "核心指标对比", "left": "center"},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-        "legend": {"bottom": 0, "data": ["提及率", "引用率", "推荐率"]},
+        "legend": {"bottom": 0, "data": ["提及率", "引用率", "TOP3 推荐率"]},
         "xAxis": {"type": "category", "data": names},
         "yAxis": {"type": "value", "name": "%", "axisLabel": {"formatter": "{value}%"}},
         "series": [
@@ -88,7 +88,7 @@ def build_coverage_option(scores_list: List[Dict]) -> Dict:
                 "label": {"show": True, "position": "top", "formatter": "{c}%"},
             },
             {
-                "name": "推荐率",
+                "name": "TOP3 推荐率",
                 "type": "bar",
                 "data": [round(s["recommendation_rate"] * 100, 1) for s in scores_list],
                 "itemStyle": {"color": colors[2]},

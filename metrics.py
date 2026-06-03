@@ -106,10 +106,13 @@ class MetricsCalculator:
         cited_count = sum(1 for r in valid_results if r.has_citation)
         scores.citation_rate = round(cited_count / len(valid_results), 4)
 
-        # ---- 推荐率 ----
-        # UCloud被推荐的响应数 / 有效响应总数
-        recommended_count = sum(1 for r in valid_results if r.ucloud_recommended)
-        scores.recommendation_rate = round(recommended_count / len(valid_results), 4)
+        # ---- TOP3 推荐率 ----
+        # UCloud进入品牌推荐列表Top3的响应数 / 有效响应总数
+        top3_count = sum(
+            1 for r in valid_results
+            if r.ucloud_rank is not None and r.ucloud_rank <= 3
+        )
+        scores.recommendation_rate = round(top3_count / len(valid_results), 4)
 
         # 细分推荐强度
         strong_count = sum(

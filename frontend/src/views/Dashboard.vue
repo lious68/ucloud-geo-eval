@@ -95,9 +95,9 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分 - 计算公式</div>
-                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + TOP3 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×45% + 引用率×25% + TOP3 推荐率×20% + 情感值×10%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘以100转换为0-100分制</div>
-                      <div class="formula-weight">加权系数: 提及率25%、引用率15%、TOP3 推荐率25%、情感值20%</div>
+                      <div class="formula-weight">加权系数: 提及率45%、引用率25%、TOP3 推荐率20%、情感值10%</div>
                     </div>
                   </template>
                   <span class="formula-trigger">ⓘ</span>
@@ -130,7 +130,7 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分</div>
-                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + TOP3 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×45% + 引用率×25% + TOP3 推荐率×20% + 情感值×10%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘100转为0-100分制</div>
                     </div>
                   </template>
@@ -148,10 +148,10 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">提及率 Mention Rate</div>
-                      <div class="formula-expr">提及率 = UCloud被提及的问题数 / 有效问题总数</div>
-                      <div class="formula-desc">在所有有效响应中，UCloud被提及（品牌名/产品名/别名）的问题占比</div>
-                      <div class="formula-example">48题中20题提及UCloud → 20/48 = 41.7%</div>
-                      <div class="formula-weight">GEO权重: 25%</div>
+                      <div class="formula-expr">提及率 = UCloud 被提及的有效响应数 / 有效响应总数</div>
+                      <div class="formula-desc">在所有有效响应中，UCloud被提及（品牌名/产品名/别名）的响应占比</div>
+                      <div class="formula-example">48条有效响应中20条提及UCloud → 20/48 = 41.7%</div>
+                      <div class="formula-weight">GEO权重: 45%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -171,7 +171,7 @@
                       <div class="formula-expr">引用率 = 包含UCloud引用/链接的响应数 / 有效响应总数</div>
                       <div class="formula-desc">AI回答中主动给出 ucloud.cn 链接或明确引用UCloud来源的比例</div>
                       <div class="formula-example">48条响应中8条含UCloud链接 → 8/48 = 16.7%</div>
-                      <div class="formula-weight">GEO权重: 15%</div>
+                      <div class="formula-weight">GEO权重: 25%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -191,7 +191,7 @@
                       <div class="formula-expr">TOP3 推荐率 = 品牌进入 Top3 的回答次数 / 有效回答总次数</div>
                       <div class="formula-desc">统计 UCloud 在回答中进入品牌推荐列表 Top3 的比例</div>
                       <div class="formula-example">48条有效回答中有12条进入Top3 → 12/48 = 25.0%</div>
-                      <div class="formula-weight">GEO权重: 25%</div>
+                      <div class="formula-weight">GEO权重: 20%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -211,7 +211,7 @@
                       <div class="formula-expr">情感值 = Σ(被提及响应的情感分数) / 被提及响应数</div>
                       <div class="formula-desc">仅UCloud被提及时计算，范围0-1</div>
                       <div class="formula-example">&gt;0.6 正面，0.4~0.6 中性，&lt;0.4 负面</div>
-                      <div class="formula-weight">GEO权重: 20%</div>
+                      <div class="formula-weight">GEO权重: 10%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -546,11 +546,11 @@ const channelDetails = computed(() => {
 const metricDefinitions = [
   {
     key: 'coverage_rate', label: '提及率', icon: '📡',
-    brief: 'UCloud 被提及的问题比例',
-    formula: '提及率 = UCloud被提及的问题数 / 有效问题总数',
-    description: '在所有有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的问题占比',
-    example: '如48题中有20题提及UCloud，则提及率=20/48=41.7%',
-    weight: 25,
+    brief: 'UCloud 被提及的有效响应比例',
+    formula: '提及率 = UCloud 被提及的有效响应数 / 有效响应总数',
+    description: '在所有有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的响应占比',
+    example: '如48条有效响应中有20条提及UCloud，则提及率=20/48=41.7%',
+    weight: 45,
   },
   {
     key: 'citation_rate', label: '引用率', icon: '🔗',
@@ -558,7 +558,7 @@ const metricDefinitions = [
     formula: '引用率 = 包含UCloud引用的响应数 / 有效响应总数',
     description: 'AI回答中主动给出 ucloud.cn 链接或明确引用 UCloud 来源的比例',
     example: '如48条响应中有8条包含UCloud链接，则引用率=8/48=16.7%',
-    weight: 15,
+    weight: 25,
   },
   {
     key: 'recommendation_rate', label: 'TOP3 推荐率', icon: '👍',
@@ -566,7 +566,7 @@ const metricDefinitions = [
     formula: 'TOP3 推荐率 = 品牌进入 Top3 的回答次数 / 有效回答总次数',
     description: '统计 UCloud 在回答中进入品牌推荐列表 Top3 的比例',
     example: '如48条有效回答中有12条进入Top3，则TOP3推荐率=12/48=25.0%',
-    weight: 25,
+    weight: 20,
   },
   {
     key: 'sentiment_score', label: '情感值', icon: '💛',
@@ -574,7 +574,7 @@ const metricDefinitions = [
     formula: '情感值 = Σ(被提及响应的情感分数) / 被提及响应数',
     description: '仅在UCloud被提及时计算，范围0-1，>0.6为正面，0.4-0.6为中性，<0.4为负面',
     example: '如20条提及响应的平均情感为0.72，则情感值=0.72（偏正面）',
-    weight: 20,
+    weight: 10,
   },
 ]
 

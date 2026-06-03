@@ -337,6 +337,13 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
             if valid_count:
                 row["recommendation_rate"] = round((top3_count or 0) / valid_count, 4)
 
+            row["geo_score"] = round((
+                (row.get("coverage_rate") or 0) * 0.45 +
+                (row.get("citation_rate") or 0) * 0.25 +
+                (row.get("recommendation_rate") or 0) * 0.20 +
+                (row.get("sentiment_score") or 0) * 0.10
+            ) * 100, 2)
+
         return rows
     finally:
         await db.close()

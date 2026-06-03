@@ -149,7 +149,7 @@
                     <div class="formula-tooltip">
                       <div class="formula-title">提及率 Mention Rate</div>
                       <div class="formula-expr">提及率 = UCloud 被提及的有效响应数 / 有效响应总数</div>
-                      <div class="formula-desc">在所有有效响应中，UCloud被提及（品牌名/产品名/别名）的响应占比</div>
+                      <div class="formula-desc">仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；在这些有效响应中，UCloud被提及（品牌名/产品名/别名）的响应占比</div>
                       <div class="formula-example">48条有效响应中20条提及UCloud → 20/48 = 41.7%</div>
                       <div class="formula-weight">GEO权重: 45%</div>
                     </div>
@@ -548,7 +548,7 @@ const metricDefinitions = [
     key: 'coverage_rate', label: '提及率', icon: '📡',
     brief: 'UCloud 被提及的有效响应比例',
     formula: '提及率 = UCloud 被提及的有效响应数 / 有效响应总数',
-    description: '在所有有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的响应占比',
+    description: '仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；在这些有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的响应占比',
     example: '如48条有效响应中有20条提及UCloud，则提及率=20/48=41.7%',
     weight: 45,
   },

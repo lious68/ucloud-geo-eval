@@ -4,11 +4,29 @@ SQLite 异步数据库，管理评测、结果、问题、设置
 """
 import os
 import json
+import re
 import aiosqlite
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
+
+UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
+
+
+def _natural_question_filter_sql(alias: str = "q") -> str:
+    """排除题干自带 UCloud/优刻得 字眼的问题，仅统计自然问题。"""
+    q = f"{alias}.question"
+    return (
+        f"(({q} IS NULL) OR ("
+        f"LOWER(REPLACE({q}, ' ', '')) NOT LIKE '%ucloud%' "
+        f"AND REPLACE({q}, ' ', '') NOT LIKE '%优刻得%'))"
+    )
+
+
+def is_natural_question_text(question: str) -> bool:
+    """题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    return not UCLOUD_QUESTION_PATTERN.search(question or "")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS evaluation_runs (
@@ -318,24 +336,46 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
         # UCloud 进入品牌推荐列表 Top3 的有效回答数 / 有效回答总数。
         # 基于 analysis_results 动态回填，历史评测无需重跑也能按新口径展示。
         for row in rows:
-            top3_query = """
+            metrics_query = f"""
                 SELECT
                     COUNT(*) AS valid_count,
-                    SUM(CASE WHEN ucloud_rank IS NOT NULL AND ucloud_rank <= 3 THEN 1 ELSE 0 END) AS top3_count
-                FROM analysis_results
-                WHERE run_id=? AND model_key=? AND (error_message IS NULL OR error_message='')
+                    SUM(CASE WHEN ar.ucloud_mentioned=1 THEN 1 ELSE 0 END) AS mentioned_count,
+                    SUM(CASE WHEN ar.has_citation=1 THEN 1 ELSE 0 END) AS citation_count,
+                    SUM(CASE WHEN ar.ucloud_rank IS NOT NULL AND ar.ucloud_rank <= 3 THEN 1 ELSE 0 END) AS top3_count,
+                    AVG(CASE WHEN ar.ucloud_mentioned=1 THEN ar.sentiment_score ELSE NULL END) AS sentiment_avg,
+                    AVG(CASE WHEN ar.ucloud_rank IS NOT NULL THEN ar.ucloud_rank ELSE NULL END) AS avg_rank
+                FROM analysis_results ar
+                JOIN questions q ON q.id = ar.question_id
+                WHERE ar.run_id=?
+                  AND ar.model_key=?
+                  AND (ar.error_message IS NULL OR ar.error_message='')
+                  AND {_natural_question_filter_sql('q')}
             """
-            top3_params = [run_id, row["model_key"]]
+            metrics_params = [run_id, row["model_key"]]
             if row.get("category"):
-                top3_query += " AND question_id IN (SELECT id FROM questions WHERE category=?)"
-                top3_params.append(row["category"])
+                metrics_query += " AND q.category=?"
+                metrics_params.append(row["category"])
 
-            top3_cursor = await db.execute(top3_query, top3_params)
-            top3_row = await top3_cursor.fetchone()
-            valid_count = top3_row["valid_count"] if top3_row else 0
-            top3_count = top3_row["top3_count"] if top3_row else 0
+            metrics_cursor = await db.execute(metrics_query, metrics_params)
+            metrics_row = await metrics_cursor.fetchone()
+            valid_count = metrics_row["valid_count"] if metrics_row else 0
             if valid_count:
-                row["recommendation_rate"] = round((top3_count or 0) / valid_count, 4)
+                mentioned_count = metrics_row["mentioned_count"] or 0
+                citation_count = metrics_row["citation_count"] or 0
+                top3_count = metrics_row["top3_count"] or 0
+                row["valid_responses"] = valid_count
+                row["coverage_rate"] = round(mentioned_count / valid_count, 4)
+                row["citation_rate"] = round(citation_count / valid_count, 4)
+                row["recommendation_rate"] = round(top3_count / valid_count, 4)
+                row["sentiment_score"] = round(metrics_row["sentiment_avg"] or 0, 4)
+                row["avg_rank"] = round(metrics_row["avg_rank"] or 0, 2)
+            else:
+                row["valid_responses"] = 0
+                row["coverage_rate"] = 0
+                row["citation_rate"] = 0
+                row["recommendation_rate"] = 0
+                row["sentiment_score"] = 0
+                row["avg_rank"] = 0
 
             row["geo_score"] = round((
                 (row.get("coverage_rate") or 0) * 0.45 +

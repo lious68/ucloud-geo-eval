@@ -58,8 +58,18 @@ async def get_charts(run_id: str):
     finally:
         await db_conn.close()
 
-    # 获取详细结果用于情感图
+    # 获取详细结果用于情感图，仅统计题干不自带 UCloud/优刻得 字眼的自然问题
     all_results = await db.get_results(run_id)
+    db_conn = await db.get_db()
+    try:
+        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        natural_question_ids = {
+            r["id"] for r in await cursor.fetchall()
+            if db.is_natural_question_text(r["question"])
+        }
+    finally:
+        await db_conn.close()
+    all_results = [r for r in all_results if r["question_id"] in natural_question_ids]
     results_by_model = {}
     for r in all_results:
         mk = r["model_key"]

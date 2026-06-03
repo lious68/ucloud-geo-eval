@@ -29,7 +29,7 @@
       <div class="metric-intro-section" style="margin-top:32px">
         <h3 class="section-title">GEO 评估指标说明</h3>
         <el-row :gutter="16">
-          <el-col :span="8" v-for="m in metricDefinitions" :key="m.key">
+          <el-col :span="6" v-for="m in metricDefinitions" :key="m.key">
             <el-card shadow="hover" class="intro-card">
               <div class="intro-card-header">
                 <span class="intro-icon">{{ m.icon }}</span>
@@ -56,11 +56,11 @@
     <!-- ===== 有数据时的完整仪表盘 ===== -->
     <template v-else>
 
-      <!-- 五大核心指标卡片 -->
+      <!-- 核心指标卡片 -->
       <div class="metric-cards-section">
         <h3 class="section-title">核心指标概览</h3>
         <el-row :gutter="16">
-          <el-col :span="4" v-for="m in coreMetrics" :key="m.key">
+          <el-col :span="5" v-for="m in coreMetrics" :key="m.key">
             <el-card shadow="hover" class="metric-card" :class="'metric-' + m.key">
               <div class="metric-card-header">
                 <span class="metric-icon">{{ m.icon }}</span>
@@ -95,10 +95,9 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分 - 计算公式</div>
-                      <div class="formula-expr">GEO = (覆盖率×25% + 提及率×15% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘以100转换为0-100分制</div>
-                      <div class="formula-example">提及率归一化: min(提及率/3.0, 1.0)，即提及3次及以上为满分</div>
-                      <div class="formula-weight">加权系数: 覆盖率25%、提及率15%、引用率15%、推荐率25%、情感值20%</div>
+                      <div class="formula-weight">加权系数: 提及率25%、引用率15%、推荐率25%、情感值20%</div>
                     </div>
                   </template>
                   <span class="formula-trigger">ⓘ</span>
@@ -131,9 +130,8 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分</div>
-                      <div class="formula-expr">GEO = (覆盖率×25% + 提及率×15% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×25% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘100转为0-100分制</div>
-                      <div class="formula-example">提及率归一化: min(提及率/3.0, 1.0)</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -145,12 +143,12 @@
             </el-table-column>
             <el-table-column width="120">
               <template #header>
-                <span>覆盖率</span>
+                <span>提及率</span>
                 <el-tooltip placement="top" effect="light" :width="300">
                   <template #content>
                     <div class="formula-tooltip">
-                      <div class="formula-title">覆盖率 Coverage Rate</div>
-                      <div class="formula-expr">覆盖率 = UCloud被提及的问题数 / 有效问题总数</div>
+                      <div class="formula-title">提及率 Mention Rate</div>
+                      <div class="formula-expr">提及率 = UCloud被提及的问题数 / 有效问题总数</div>
                       <div class="formula-desc">在所有有效响应中，UCloud被提及（品牌名/产品名/别名）的问题占比</div>
                       <div class="formula-example">48题中20题提及UCloud → 20/48 = 41.7%</div>
                       <div class="formula-weight">GEO权重: 25%</div>
@@ -161,26 +159,6 @@
               </template>
               <template #default="{ row }">
                 {{ (row.coverage_rate * 100).toFixed(1) }}%
-              </template>
-            </el-table-column>
-            <el-table-column width="120">
-              <template #header>
-                <span>提及率</span>
-                <el-tooltip placement="top" effect="light" :width="320">
-                  <template #content>
-                    <div class="formula-tooltip">
-                      <div class="formula-title">提及率 Mention Rate</div>
-                      <div class="formula-expr">提及率 = Σ(提及次数 × 位置权重) / 有效响应总数</div>
-                      <div class="formula-desc">综合考量提及频次和首次出现位置，越靠前权重越高</div>
-                      <div class="formula-example">位置权重: 首位1.0, 第2位0.8, 第3位0.6, 第4位0.4, 第5+位0.2</div>
-                      <div class="formula-weight">GEO权重: 15% (归一化: min(提及率/3.0, 1.0))</div>
-                    </div>
-                  </template>
-                  <span class="col-formula-trigger">ⓘ</span>
-                </el-tooltip>
-              </template>
-              <template #default="{ row }">
-                {{ row.mention_rate.toFixed(2) }}
               </template>
             </el-table-column>
             <el-table-column width="120">
@@ -359,7 +337,7 @@
           <div class="drilldown-filters">
             <el-select v-model="filterMetric" placeholder="指标筛选" size="small" style="width:140px">
               <el-option label="全部指标" value="all" />
-              <el-option label="覆盖率" value="coverage" />
+              <el-option label="提及率" value="coverage" />
               <el-option label="引用率" value="citation" />
               <el-option label="推荐率" value="recommendation" />
               <el-option label="情感值" value="sentiment" />
@@ -392,7 +370,7 @@
                 <el-tag size="small" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="覆盖率" width="80" sortable :sort-method="(a,b) => a.metrics.coverage.numerator - b.metrics.coverage.numerator">
+            <el-table-column label="提及率" width="80" sortable :sort-method="(a,b) => a.metrics.coverage.numerator - b.metrics.coverage.numerator">
               <template #default="{ row }">
                 <span :class="row.metrics.coverage.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.coverage.value }}</span>
               </template>
@@ -505,7 +483,7 @@ const filterMetric = ref('all')
 const filterCondition = ref('all')
 
 const filterMetricLabel = computed(() => {
-  const map = { coverage: '覆盖率', citation: '引用率', recommendation: '推荐率', sentiment: '情感值' }
+  const map = { coverage: '提及率', citation: '引用率', recommendation: '推荐率', sentiment: '情感值' }
   return map[filterMetric.value] || ''
 })
 
@@ -572,20 +550,12 @@ const channelDetails = computed(() => {
 // ===== 指标定义（含公式说明） =====
 const metricDefinitions = [
   {
-    key: 'coverage_rate', label: '覆盖率', icon: '📡',
+    key: 'coverage_rate', label: '提及率', icon: '📡',
     brief: 'UCloud 被提及的问题比例',
-    formula: '覆盖率 = UCloud被提及的问题数 / 有效问题总数',
+    formula: '提及率 = UCloud被提及的问题数 / 有效问题总数',
     description: '在所有有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的问题占比',
-    example: '如48题中有20题提及UCloud，则覆盖率=20/48=41.7%',
+    example: '如48题中有20题提及UCloud，则提及率=20/48=41.7%',
     weight: 25,
-  },
-  {
-    key: 'mention_rate', label: '提及率', icon: '💬',
-    brief: '平均每条响应中UCloud提及次数(含位置权重)',
-    formula: '提及率 = Σ(提及次数 × 位置权重) / 有效响应总数',
-    description: '综合考量提及频次和首次出现位置，越靠前位置权重越高',
-    example: '位置权重: 第1位=1.0, 第2位=0.8, 第3位=0.6, 第4位=0.4, 第5+位=0.2',
-    weight: 15,
   },
   {
     key: 'citation_rate', label: '引用率', icon: '🔗',
@@ -623,7 +593,6 @@ function formatMetricValue(key, raw) {
   if (key === 'coverage_rate' || key === 'citation_rate' || key === 'recommendation_rate') {
     return (raw * 100).toFixed(1) + '%'
   }
-  if (key === 'mention_rate') return raw.toFixed(2)
   if (key === 'sentiment_score') return raw.toFixed(2)
   return raw
 }
@@ -638,7 +607,6 @@ const coreMetrics = computed(() => {
       bestModel: best ? best.model_name : '',
       barPercent: m.key === 'coverage_rate' || m.key === 'citation_rate' || m.key === 'recommendation_rate'
         ? raw * 100
-        : m.key === 'mention_rate' ? Math.min(raw / 3 * 100, 100)
         : m.key === 'sentiment_score' ? raw * 100
         : 0,
     }
@@ -786,7 +754,6 @@ onMounted(loadData)
 .metric-bar-wrap { height: 4px; background: #eee; border-radius: 2px; overflow: hidden; }
 .metric-bar { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
 .metric-coverage_rate .metric-bar { background: #409eff; }
-.metric-mention_rate .metric-bar { background: #67c23a; }
 .metric-citation_rate .metric-bar { background: #e6a23c; }
 .metric-recommendation_rate .metric-bar { background: #f56c6c; }
 .metric-sentiment_score .metric-bar { background: #f5c542; }

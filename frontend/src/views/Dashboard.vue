@@ -1,13 +1,6 @@
 <template>
   <div class="dashboard">
     <h2 class="page-title">📊 GEO 评估仪表盘</h2>
-    <div v-if="latestRun && route.query.run_id" class="run-breadcrumb">
-      <span>正在查看：</span>
-      <el-tag size="small">{{ latestRun.name || 'GEO评估' }}</el-tag>
-      <span style="color:#999;margin-left:4px">{{ formatRunTime(latestRun.started_at) }}</span>
-      <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
-    </div>
-
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-state">
       <el-icon class="is-loading" :size="32"><Loading /></el-icon>
@@ -55,6 +48,13 @@
 
     <!-- ===== 有数据时的完整仪表盘 ===== -->
     <template v-else>
+
+      <!-- 评测时间 -->
+      <div v-if="latestRun" class="run-breadcrumb">
+        <span>评测时间：</span>
+        <el-tag size="small" type="info">{{ formatRunTime(latestRun.completed_at || latestRun.started_at) }}</el-tag>
+        <el-button v-if="route.query.run_id" size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
+      </div>
 
       <!-- 核心指标卡片 -->
       <div class="metric-cards-section">

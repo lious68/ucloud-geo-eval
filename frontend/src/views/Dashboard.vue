@@ -357,8 +357,8 @@
                 <div class="expand-content">
                   <div class="expand-label">题目：</div>
                   <div class="expand-text">{{ row.question_text }}</div>
-                  <div class="expand-label" style="margin-top:8px">AI 回答摘要：</div>
-                  <div class="expand-text" v-if="row.response_summary">{{ row.response_summary }}</div>
+                  <div class="expand-label" style="margin-top:8px">AI 完整回答：</div>
+                  <div class="expand-text full-answer" v-if="row.response_content || row.response_summary">{{ row.response_content || row.response_summary }}</div>
                   <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
                   <div v-if="row.error_message" class="expand-error">⚠️ 错误: {{ row.error_message }}</div>
                 </div>
@@ -824,5 +824,6 @@ onMounted(loadData)
 .expand-content { padding: 8px 16px; background: #fafafa; }
 .expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }
 .expand-text { font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap; }
+.full-answer { max-height: none; overflow: visible; }
 .expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; }
 </style>

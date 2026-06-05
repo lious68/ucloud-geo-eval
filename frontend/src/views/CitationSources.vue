@@ -125,22 +125,45 @@ const topSourceChartRef = ref(null)
 const platformPieChartRef = ref(null)
 
 const platformColors = ['#5b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6']
+const fixedPlatforms = [
+  { key: 'qwen', name: '通义千问', aliases: ['qwen', '通义千问', '通义', 'qianwen'] },
+  { key: 'kimi', name: 'Kimi', aliases: ['kimi', '月之暗面', 'moonshot'] },
+  { key: 'ernie', name: '文心一言', aliases: ['ernie', '文心一言', '文心', 'baidu'] },
+  { key: 'deepseek', name: 'DeepSeek', aliases: ['deepseek'] },
+  { key: 'doubao', name: '豆包', aliases: ['doubao', '豆包', 'bytedance'] },
+]
 
 const completedRuns = computed(() => runs.value.filter(r => r.status === 'completed'))
-const platformOptions = computed(() => {
-  const map = new Map()
-  sourceRows.value.forEach(row => map.set(row.model_key, row.model_name || row.model_key))
-  return [
-    { key: 'all', name: '全部渠道' },
-    ...Array.from(map.entries()).map(([key, name]) => ({ key, name })),
-  ]
-})
+const platformOptions = computed(() => [
+  { key: 'all', name: '全部渠道' },
+  ...fixedPlatforms.map(({ key, name }) => ({ key, name })),
+])
+
+function platformMatches(row, platformKey) {
+  if (platformKey === 'all') return true
+  const platform = fixedPlatforms.find(p => p.key === platformKey)
+  if (!platform) return row.model_key === platformKey
+  const haystack = `${row.model_key || ''} ${row.model_name || ''}`.toLowerCase()
+  return platform.aliases.some(alias => haystack.includes(alias.toLowerCase()))
+}
+
+function platformDisplayName(row) {
+  return fixedPlatforms.find(p => platformMatches(row, p.key))?.name || row.model_name || row.model_key
+}
+
+function sortPlatforms(list) {
+  return list.sort((a, b) => {
+    const ai = fixedPlatforms.findIndex(p => p.name === a.name)
+    const bi = fixedPlatforms.findIndex(p => p.name === b.name)
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
+  })
+}
 
 const filteredRawRows = computed(() => {
   const [start, end] = dateRange.value || []
   const keyword = searchKeyword.value.trim().toLowerCase()
   return sourceRows.value.filter(row => {
-    if (selectedPlatform.value !== 'all' && row.model_key !== selectedPlatform.value) return false
+    if (!platformMatches(row, selectedPlatform.value)) return false
     if (start && row.run_date < start) return false
     if (end && row.run_date > end) return false
     if (keyword && !row.source.toLowerCase().includes(keyword)) return false
@@ -156,7 +179,7 @@ const filteredSources = computed(() => {
     }
     const item = map.get(row.source)
     item.count += row.count
-    item.platformMap.set(row.model_name, (item.platformMap.get(row.model_name) || 0) + row.count)
+    item.platformMap.set(platformDisplayName(row), (item.platformMap.get(platformDisplayName(row)) || 0) + row.count)
     row.sample_urls.forEach(url => {
       if (item.sample_urls.length < 6 && !item.sample_urls.includes(url)) item.sample_urls.push(url)
     })
@@ -164,21 +187,18 @@ const filteredSources = computed(() => {
   return Array.from(map.values()).map(item => ({
     source: item.source,
     count: item.count,
-    platforms: Array.from(item.platformMap.entries()).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+    platforms: sortPlatforms(Array.from(item.platformMap.entries()).map(([name, count]) => ({ name, count }))),
     sample_urls: item.sample_urls,
   })).sort((a, b) => b.count - a.count)
 })
 
 const platformShare = computed(() => {
-  const map = new Map()
-  filteredRawRows.value.forEach(row => {
-    map.set(row.model_name, (map.get(row.model_name) || 0) + row.count)
+  return fixedPlatforms.map((platform, i) => {
+    const count = filteredRawRows.value
+      .filter(row => platformMatches(row, platform.key))
+      .reduce((sum, row) => sum + row.count, 0)
+    return { name: platform.name, count, color: platformColors[i % platformColors.length] }
   })
-  return Array.from(map.entries()).map(([name, count], i) => ({
-    name,
-    count,
-    color: platformColors[i % platformColors.length],
-  })).sort((a, b) => b.count - a.count)
 })
 
 const summary = computed(() => {

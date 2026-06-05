@@ -262,6 +262,9 @@ async def get_question_drilldown(run_id: str, model_key: str):
     for r in all_results:
         qid = r["question_id"]
         q_info = question_map.get(qid, {})
+        question_text = q_info.get("text", qid)
+        if not db.is_natural_question_text(question_text):
+            continue
         has_error = r.get("error_message") and r["error_message"] != ""
 
         # 构建指标计数（分子/分母）
@@ -276,7 +279,7 @@ async def get_question_drilldown(run_id: str, model_key: str):
 
         questions.append({
             "question_id": qid,
-            "question_text": q_info.get("text", qid),
+            "question_text": question_text,
             "category": q_info.get("category", ""),
             "question_type": q_info.get("type", ""),
             "metrics": {

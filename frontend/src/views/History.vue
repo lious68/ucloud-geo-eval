@@ -66,9 +66,11 @@
         <el-card>
           <div ref="trendChartRef" style="height:300px"></div>
         </el-card>
-        <el-card style="margin-top:16px">
-          <div ref="metricTrendChartRef" style="height:340px"></div>
-        </el-card>
+        <div class="metric-trend-grid">
+          <el-card v-for="metric in metricTrendDefs" :key="metric.key">
+            <div :ref="el => { if (el) metricChartRefs[metric.key] = el }" style="height:280px"></div>
+          </el-card>
+        </div>
       </div>
     </template>
   </div>
@@ -85,7 +87,14 @@ const router = useRouter()
 const runs = ref([])
 const loading = ref(true)
 const trendChartRef = ref(null)
-const metricTrendChartRef = ref(null)
+const metricChartRefs = ref({})
+
+const metricTrendDefs = [
+  { key: 'coverage_rate', name: '提及率', color: '#409eff' },
+  { key: 'citation_rate', name: '引用率', color: '#e6a23c' },
+  { key: 'recommendation_rate', name: 'TOP3 推荐率', color: '#f56c6c' },
+  { key: 'sentiment_score', name: '情感值', color: '#67c23a' },
+]
 
 const completedRuns = computed(() => runs.value.filter(r => r.status === 'completed'))
 
@@ -158,7 +167,7 @@ async function loadRuns() {
     await nextTick()
     if (completedRuns.value.length >= 2) {
       renderTrendChart()
-      renderMetricTrendChart()
+      renderMetricTrendCharts()
     }
   } catch (e) {
     console.error('Load runs error:', e)
@@ -192,37 +201,34 @@ function renderTrendChart() {
   window.addEventListener('resize', () => chart.resize())
 }
 
-function renderMetricTrendChart() {
-  if (!metricTrendChartRef.value) return
+function renderMetricTrendCharts() {
   const data = completedRuns.value.slice().reverse()
-
   const dates = data.map(r => formatTime(r.started_at))
-  const metricDefs = [
-    { key: 'coverage_rate', name: '提及率', color: '#409eff' },
-    { key: 'citation_rate', name: '引用率', color: '#e6a23c' },
-    { key: 'recommendation_rate', name: 'TOP3 推荐率', color: '#f56c6c' },
-    { key: 'sentiment_score', name: '情感值', color: '#67c23a' },
-  ]
 
-  const chart = echarts.init(metricTrendChartRef.value)
-  chart.setOption({
-    title: { text: '仪表盘核心指标趋势（5渠道平均值）', left: 'center', top: 5, textStyle: { fontSize: 14 } },
-    tooltip: { trigger: 'axis', valueFormatter: value => `${Number(value).toFixed(1)}%` },
-    legend: { bottom: 0, data: metricDefs.map(m => m.name) },
-    grid: { left: 60, right: 30, top: 45, bottom: 55 },
-    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'value', name: '%', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
-    series: metricDefs.map(m => ({
-      name: m.name,
-      type: 'line',
-      data: data.map(r => Number(((r.metric_averages?.[m.key] || 0) * 100).toFixed(1))),
-      smooth: true,
-      itemStyle: { color: m.color },
-      lineStyle: { width: 2 },
-      label: { show: true, formatter: '{c}%', fontSize: 11 },
-    })),
+  metricTrendDefs.forEach(metric => {
+    const chartEl = metricChartRefs.value[metric.key]
+    if (!chartEl) return
+
+    const chart = echarts.init(chartEl)
+    chart.setOption({
+      title: { text: `${metric.name}趋势（5渠道平均值）`, left: 'center', top: 5, textStyle: { fontSize: 14 } },
+      tooltip: { trigger: 'axis', valueFormatter: value => `${Number(value).toFixed(1)}%` },
+      grid: { left: 55, right: 25, top: 45, bottom: 35 },
+      xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11 } },
+      yAxis: { type: 'value', name: '%', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+      series: [{
+        name: metric.name,
+        type: 'line',
+        data: data.map(r => Number(((r.metric_averages?.[metric.key] || 0) * 100).toFixed(1))),
+        smooth: true,
+        itemStyle: { color: metric.color },
+        lineStyle: { width: 2 },
+        areaStyle: { color: `${metric.color}1a` },
+        label: { show: true, formatter: '{c}%', fontSize: 11 },
+      }],
+    })
+    window.addEventListener('resize', () => chart.resize())
   })
-  window.addEventListener('resize', () => chart.resize())
 }
 
 function viewResult(runId) {
@@ -244,6 +250,11 @@ onMounted(loadRuns)
 <style scoped>
 .page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
 .section-title { font-size: 16px; font-weight: 600; color: #1a1a2e; margin-bottom: 14px; padding-left: 2px; }
+.metric-trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 .score-good { color: #67c23a; font-weight: 600; }
 .score-low { color: #f56c6c; }
+
+@media (max-width: 900px) {
+  .metric-trend-grid { grid-template-columns: 1fr; }
+}
 </style>

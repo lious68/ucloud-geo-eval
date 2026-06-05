@@ -1,5 +1,6 @@
 """结果查询路由"""
 import json
+from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query
 import database as db
 from services.chart_builder import (
@@ -8,6 +9,41 @@ from services.chart_builder import (
 )
 
 router = APIRouter(prefix="/api/results", tags=["results"])
+
+
+def _resolve_domain_label(url: str) -> str:
+    """从 URL 提取域名，作为'其他'类的细化标签。"""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if ":" in domain:
+            domain = domain.split(":")[0]
+        if domain.startswith("www."):
+            domain = domain[4:]
+        if not domain:
+            return "其他"
+        # 尝试用 core/config 的映射
+        sys_path_hack = False
+        try:
+            from config import URL_CHANNEL_MAPPING
+        except ImportError:
+            import os, sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+            from config import URL_CHANNEL_MAPPING
+            sys_path_hack = True
+
+        if domain in URL_CHANNEL_MAPPING:
+            return URL_CHANNEL_MAPPING[domain]
+        # 父域名匹配
+        parts = domain.split(".")
+        for i in range(len(parts) - 1):
+            parent = ".".join(parts[i:])
+            if parent in URL_CHANNEL_MAPPING:
+                return URL_CHANNEL_MAPPING[parent]
+        # 没匹配上就用域名本身作为标签
+        return domain
+    except Exception:
+        return "其他"
 
 
 @router.get("/{run_id}/scores")
@@ -174,6 +210,10 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
             channel = url_info.get("source_channel", "其他") or "其他"
             url_content = url_info.get("content", "")
 
+            # 细化"其他"类：按实际域名拆分
+            if channel == "其他":
+                channel = _resolve_domain_label(url_content)
+
             if channel not in by_model[mk]["channels"]:
                 by_model[mk]["channels"][channel] = {"count": 0, "sample_urls": []}
             by_model[mk]["channels"][channel]["count"] += 1
@@ -198,6 +238,10 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
                 continue
             channel = cit.get("source_channel", "其他") or "其他"
             url_content = cit.get("content", "")
+
+            # 细化"其他"类：按实际域名拆分
+            if channel == "其他":
+                channel = _resolve_domain_label(url_content)
 
             # 检查是否已统计
             existing_urls = by_model[mk]["channels"].get(channel, {}).get("sample_urls", [])
@@ -267,6 +311,8 @@ async def get_citation_drilldown(run_id: str, source_channel: str, model_key: st
         matched_urls = []
         for url_info in all_urls:
             ch = url_info.get("source_channel", "其他") or "其他"
+            if ch == "其他":
+                ch = _resolve_domain_label(url_info.get("content", ""))
             if ch == source_channel:
                 matched_urls.append(url_info)
 

@@ -12,11 +12,32 @@ from typing import Optional, List, Dict, Any
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
 
 UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
+UCLOUD_CONTEXT_PATTERN = re.compile(
+    r"u\s*cloud|优\s*刻\s*得|优刻得|UCloudStack|UCloud云|优刻得云|"
+    r"UHost|UFile|UDisk|UNet|UDB|UCache|UAI|US3|UEC|UCloudStack",
+    re.IGNORECASE,
+)
 THIRD_PARTY_CITATION_DOMAINS = [
     "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
     "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
     "mp.weixin.qq.com",
 ]
+
+
+def is_ucloud_related_citation(row: Dict[str, Any], item: Dict[str, Any], window: int = 180) -> bool:
+    """判断第三方引用 URL 附近上下文是否在讲 UCloud/优刻得。"""
+    if item.get("is_ucloud"):
+        return True
+    content = row.get("raw_content") or ""
+    position = item.get("position")
+    if not content or position is None:
+        return False
+    try:
+        pos = int(position)
+    except (TypeError, ValueError):
+        return False
+    context = content[max(0, pos - window): min(len(content), pos + window)]
+    return bool(UCLOUD_CONTEXT_PATTERN.search(context))
 
 
 def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -43,6 +64,8 @@ def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
                 continue
             url = (item.get("content") or "").lower()
             if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+                continue
+            if not is_ucloud_related_citation(row, item):
                 continue
             key = ("url", item.get("content"), item.get("position"))
             if key in seen:

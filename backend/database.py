@@ -58,18 +58,26 @@ def has_effective_citation(row: Dict[str, Any]) -> bool:
 
 
 def _natural_question_filter_sql(alias: str = "q") -> str:
-    """排除题干自带 UCloud/优刻得 字眼的问题，仅统计自然问题。"""
+    """排除引导型及题干自带 UCloud/优刻得 字眼的问题，仅统计自然问题。"""
     q = f"{alias}.question"
+    c = f"{alias}.category"
     return (
-        f"(({q} IS NULL) OR ("
+        f"(({c} IS NULL OR {c} != '引导型') AND (({q} IS NULL) OR ("
         f"LOWER(REPLACE({q}, ' ', '')) NOT LIKE '%ucloud%' "
-        f"AND REPLACE({q}, ' ', '') NOT LIKE '%优刻得%'))"
+        f"AND REPLACE({q}, ' ', '') NOT LIKE '%优刻得%')))"
     )
+
+
+def is_natural_question(question: str, category: str = "") -> bool:
+    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    if category == "引导型":
+        return False
+    return not UCLOUD_QUESTION_PATTERN.search(question or "")
 
 
 def is_natural_question_text(question: str) -> bool:
     """题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
-    return not UCLOUD_QUESTION_PATTERN.search(question or "")
+    return is_natural_question(question)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS evaluation_runs (

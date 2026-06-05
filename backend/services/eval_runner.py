@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
 
 
-def _is_natural_question(question: str) -> bool:
-    """题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+def _is_natural_question(question: str, category: str = "") -> bool:
+    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    if category == "引导型":
+        return False
     return not UCLOUD_QUESTION_PATTERN.search(question or "")
 
 # 全局任务管理
@@ -186,7 +188,7 @@ async def _run_evaluation(
 
             # 全局评分：仅统计题干不自带 UCloud/优刻得 字眼的自然问题
             from analyzer import AnalysisResult
-            natural_question_ids = {q["id"] for q in questions if _is_natural_question(q.get("question", ""))}
+            natural_question_ids = {q["id"] for q in questions if _is_natural_question(q.get("question", ""), q.get("category", ""))}
             results = [_dict_to_analysis(r) for r in all_results[mk] if r["question_id"] in natural_question_ids]
             scores = calculator.calculate_scores(results)
             scores_dict = _scores_to_dict(scores)
@@ -209,7 +211,7 @@ async def _run_evaluation(
                 natural_cat_results = []
                 for r in cat_results:
                     q = next((q for q in questions if q["id"] == r["question_id"]), None)
-                    if q and _is_natural_question(q.get("question", "")):
+                    if q and _is_natural_question(q.get("question", ""), q.get("category", "")):
                         natural_cat_results.append(r)
                 cat_analysis = [_dict_to_analysis(r) for r in natural_cat_results]
                 cat_scores = calculator.calculate_scores(cat_analysis)

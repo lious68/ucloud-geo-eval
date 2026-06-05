@@ -109,7 +109,7 @@ def build_sentiment_option(results_by_model: Dict[str, List[Dict]]) -> Dict:
             continue
         name = results[0].get("model_name", mk)
         model_names.append(name)
-        mentioned = [r for r in results if r.get("ucloud_mentioned") and not r.get("error_message")]
+        mentioned = [r for r in results if not r.get("error_message")]
         total = len(mentioned) or 1
         pos_data.append(round(sum(1 for r in mentioned if r.get("sentiment_label") == "positive") / total * 100, 1))
         neu_data.append(round(sum(1 for r in mentioned if r.get("sentiment_label") == "neutral") / total * 100, 1))

@@ -79,7 +79,7 @@
                 </el-tooltip>
               </div>
               <div class="metric-value">{{ m.displayValue }}</div>
-              <div class="metric-best">最佳渠道: {{ m.bestModel || '-' }}</div>
+              <div class="metric-best">5渠道平均值</div>
               <div class="metric-bar-wrap">
                 <div class="metric-bar" :style="{ width: m.barPercent + '%' }"></div>
               </div>
@@ -148,8 +148,8 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">提及率 Mention Rate</div>
-                      <div class="formula-expr">提及率 = UCloud 被提及的有效响应数 / 有效响应总数</div>
-                      <div class="formula-desc">仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；在这些有效响应中，UCloud被提及（品牌名/产品名/别名）的响应占比</div>
+                      <div class="formula-expr">提及率 = UCloud 被提及的自然有效响应数 / 自然有效响应总数</div>
+                      <div class="formula-desc">仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母</div>
                       <div class="formula-example">48条有效响应中20条提及UCloud → 20/48 = 41.7%</div>
                       <div class="formula-weight">GEO权重: 45%</div>
                     </div>
@@ -170,7 +170,7 @@
                       <div class="formula-title">引用率 Citation Rate</div>
                       <div class="formula-expr">引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数</div>
                       <div class="formula-desc">官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入</div>
-                      <div class="formula-example">36条自然有效响应中4条含有效来源引用 → 4/36 = 11.1%</div>
+                      <div class="formula-example">36条全部有效响应中4条含有效来源引用 → 4/36 = 11.1%</div>
                       <div class="formula-weight">GEO权重: 25%</div>
                     </div>
                   </template>
@@ -188,8 +188,8 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">TOP3 推荐率 Top3 Recommendation Rate</div>
-                      <div class="formula-expr">TOP3 推荐率 = 品牌进入 Top3 的回答次数 / 有效回答总次数</div>
-                      <div class="formula-desc">统计 UCloud 在回答中进入品牌推荐列表 Top3 的比例</div>
+                      <div class="formula-expr">TOP3 推荐率 = 品牌进入 Top3 的自然回答次数 / 自然有效回答总次数</div>
+                      <div class="formula-desc">仅统计自然问题中 UCloud 进入品牌推荐列表 Top3 的比例；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母</div>
                       <div class="formula-example">48条有效回答中有12条进入Top3 → 12/48 = 25.0%</div>
                       <div class="formula-weight">GEO权重: 20%</div>
                     </div>
@@ -208,8 +208,8 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">情感值 Sentiment Score</div>
-                      <div class="formula-expr">情感值 = Σ(被提及响应的情感分数) / 被提及响应数</div>
-                      <div class="formula-desc">仅UCloud被提及时计算，范围0-1</div>
+                      <div class="formula-expr">情感值 = Σ(全部有效响应的情感分数) / 全部有效响应数</div>
+                      <div class="formula-desc">Q1-Q10 引导型问题正常显示并参与统计，范围0-1</div>
                       <div class="formula-example">&gt;0.6 正面，0.4~0.6 中性，&lt;0.4 负面</div>
                       <div class="formula-weight">GEO权重: 10%</div>
                     </div>
@@ -547,8 +547,8 @@ const metricDefinitions = [
   {
     key: 'coverage_rate', label: '提及率', icon: '📡',
     brief: 'UCloud 被提及的有效响应比例',
-    formula: '提及率 = UCloud 被提及的有效响应数 / 有效响应总数',
-    description: '仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；在这些有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的响应占比',
+    formula: '提及率 = UCloud 被提及的自然有效响应数 / 自然有效响应总数',
+    description: '仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母',
     example: '如48条有效响应中有20条提及UCloud，则提及率=20/48=41.7%',
     weight: 45,
   },
@@ -557,31 +557,32 @@ const metricDefinitions = [
     brief: '包含UCloud引用/链接的响应比例',
     formula: '引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数',
     description: '官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入',
-    example: '如36条自然有效响应中有4条含有效来源引用，则引用率=4/36=11.1%',
+    example: '如36条全部有效响应中有4条含有效来源引用，则引用率=4/36=11.1%',
     weight: 25,
   },
   {
     key: 'recommendation_rate', label: 'TOP3 推荐率', icon: '👍',
     brief: '品牌进入 Top3 的回答比例',
-    formula: 'TOP3 推荐率 = 品牌进入 Top3 的回答次数 / 有效回答总次数',
-    description: '统计 UCloud 在回答中进入品牌推荐列表 Top3 的比例',
+    formula: 'TOP3 推荐率 = 品牌进入 Top3 的自然回答次数 / 自然有效回答总次数',
+    description: '仅统计自然问题中 UCloud 在回答中进入品牌推荐列表 Top3 的比例；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母',
     example: '如48条有效回答中有12条进入Top3，则TOP3推荐率=12/48=25.0%',
     weight: 20,
   },
   {
     key: 'sentiment_score', label: '情感值', icon: '💛',
-    brief: 'UCloud提及时的平均情感倾向',
-    formula: '情感值 = Σ(被提及响应的情感分数) / 被提及响应数',
-    description: '仅在UCloud被提及时计算，范围0-1，>0.6为正面，0.4-0.6为中性，<0.4为负面',
+    brief: '全部有效响应的平均情感倾向',
+    formula: '情感值 = Σ(全部有效响应的情感分数) / 全部有效响应数',
+    description: 'Q1-Q10 引导型问题正常显示并参与统计，范围0-1，>0.6为正面，0.4-0.6为中性，<0.4为负面',
     example: '如20条提及响应的平均情感为0.72，则情感值=0.72（偏正面）',
     weight: 10,
   },
 ]
 
 // ===== 计算核心指标卡片 =====
-function getBest(key) {
-  if (!scores.value.length) return null
-  return [...scores.value].sort((a, b) => b[key] - a[key])[0]
+function getMetricAverage(key) {
+  if (!scores.value.length) return 0
+  const total = scores.value.reduce((sum, s) => sum + (Number(s[key]) || 0), 0)
+  return total / scores.value.length
 }
 
 function formatMetricValue(key, raw) {
@@ -594,12 +595,10 @@ function formatMetricValue(key, raw) {
 
 const coreMetrics = computed(() => {
   return metricDefinitions.map(m => {
-    const best = getBest(m.key)
-    const raw = best ? best[m.key] : 0
+    const raw = getMetricAverage(m.key)
     return {
       ...m,
-      displayValue: best ? formatMetricValue(m.key, raw) : '-',
-      bestModel: best ? best.model_name : '',
+      displayValue: scores.value.length ? formatMetricValue(m.key, raw) : '-',
       barPercent: m.key === 'coverage_rate' || m.key === 'citation_rate' || m.key === 'recommendation_rate'
         ? raw * 100
         : m.key === 'sentiment_score' ? raw * 100
@@ -607,6 +606,11 @@ const coreMetrics = computed(() => {
     }
   })
 })
+
+function getBest(key) {
+  if (!scores.value.length) return null
+  return [...scores.value].sort((a, b) => b[key] - a[key])[0]
+}
 
 const geoBest = computed(() => getBest('geo_score'))
 const geoBestScore = computed(() => geoBest.value ? geoBest.value.geo_score.toFixed(1) : '-')

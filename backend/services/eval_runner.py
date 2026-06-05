@@ -186,10 +186,9 @@ async def _run_evaluation(
             if not all_results[mk]:
                 continue
 
-            # 全局评分：仅统计题干不自带 UCloud/优刻得 字眼的自然问题
+            # 全局评分：提及率/TOP3 仅统计自然问题；引用率/情感值统计全部有效问题
             from analyzer import AnalysisResult
-            natural_question_ids = {q["id"] for q in questions if _is_natural_question(q.get("question", ""), q.get("category", ""))}
-            results = [_dict_to_analysis(r) for r in all_results[mk] if r["question_id"] in natural_question_ids]
+            results = [_dict_to_analysis(r) for r in all_results[mk]]
             scores = calculator.calculate_scores(results)
             scores_dict = _scores_to_dict(scores)
             model_name = results[0].model_name if results else (all_results[mk][0].get("model_name") if all_results[mk] else mk)
@@ -208,12 +207,7 @@ async def _run_evaluation(
                         break
 
             for cat, cat_results in categories.items():
-                natural_cat_results = []
-                for r in cat_results:
-                    q = next((q for q in questions if q["id"] == r["question_id"]), None)
-                    if q and _is_natural_question(q.get("question", ""), q.get("category", "")):
-                        natural_cat_results.append(r)
-                cat_analysis = [_dict_to_analysis(r) for r in natural_cat_results]
+                cat_analysis = [_dict_to_analysis(r) for r in cat_results]
                 cat_scores = calculator.calculate_scores(cat_analysis)
                 cat_dict = _scores_to_dict(cat_scores)
                 await save_geo_scores(run_id, mk, model_name, cat, cat_dict)

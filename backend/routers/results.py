@@ -58,18 +58,8 @@ async def get_charts(run_id: str):
     finally:
         await db_conn.close()
 
-    # 获取详细结果用于情感图，仅统计题干不自带 UCloud/优刻得 字眼的自然问题
+    # 获取详细结果用于情感图，情感值按全部有效问题统计
     all_results = await db.get_results(run_id)
-    db_conn = await db.get_db()
-    try:
-        cursor = await db_conn.execute("SELECT id, question, category FROM questions")
-        natural_question_ids = {
-            r["id"] for r in await cursor.fetchall()
-            if db.is_natural_question(r["question"], r["category"])
-        }
-    finally:
-        await db_conn.close()
-    all_results = [r for r in all_results if r["question_id"] in natural_question_ids]
     results_by_model = {}
     for r in all_results:
         mk = r["model_key"]
@@ -112,11 +102,8 @@ async def get_citation_details(run_id: str, model_key: str = None):
     # 按模型分组
     by_model = {}
     for r in all_results:
-        # 仅保留自然问题中按新口径贡献引用率的记录
         q_info = question_map.get(r["question_id"], {})
         question_text = q_info.get("text", "")
-        if not db.is_natural_question(question_text, q_info.get("category", "")):
-            continue
         citations_list = db.get_effective_citations(r)
         if not citations_list:
             continue
@@ -147,7 +134,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
 
     all_results = await db.get_results(run_id, model_key)
 
-    # 关联 questions 表，引用渠道仅统计自然问题中按新口径贡献引用率的响应
+    # 关联 questions 表，引用渠道按全部有效问题统计
     db_conn = await db.get_db()
     question_map = {}
     try:
@@ -160,8 +147,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
     by_model = {}
     for r in all_results:
         q_info = question_map.get(r["question_id"], {})
-        question_text = q_info.get("text", "")
-        if not db.is_natural_question(question_text, q_info.get("category", "")) or not db.has_effective_citation(r):
+        if not db.has_effective_citation(r):
             continue
 
         mk = r["model_key"]
@@ -265,15 +251,14 @@ async def get_question_drilldown(run_id: str, model_key: str):
         qid = r["question_id"]
         q_info = question_map.get(qid, {})
         question_text = q_info.get("text", qid)
-        if not db.is_natural_question(question_text, q_info.get("category", "")):
-            continue
+        is_natural = db.is_natural_question(question_text, q_info.get("category", ""))
         has_error = r.get("error_message") and r["error_message"] != ""
 
         # 构建指标计数（分子/分母）
         denom = 1  # 每题每个模型只回答一次
-        coverage_num = 1 if r.get("ucloud_mentioned") and not has_error else 0
+        coverage_num = 1 if is_natural and r.get("ucloud_mentioned") and not has_error else 0
         citation_num = 1 if db.has_effective_citation(r) and not has_error else 0
-        recommend_num = 1 if r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3 and not has_error else 0
+        recommend_num = 1 if is_natural and r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3 and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
 
         # 完整回答
@@ -285,12 +270,12 @@ async def get_question_drilldown(run_id: str, model_key: str):
             "category": q_info.get("category", ""),
             "question_type": q_info.get("type", ""),
             "metrics": {
-                "coverage": {"numerator": coverage_num, "denominator": denom if not has_error else 0,
-                             "value": f"{coverage_num}/{denom}" if not has_error else "-"},
+                "coverage": {"numerator": coverage_num, "denominator": denom if is_natural and not has_error else 0,
+                             "value": f"{coverage_num}/{denom}" if is_natural and not has_error else "-"},
                 "citation": {"numerator": citation_num, "denominator": denom if not has_error else 0,
                              "value": f"{citation_num}/{denom}" if not has_error else "-"},
-                "recommendation": {"numerator": recommend_num, "denominator": denom if not has_error else 0,
-                                   "value": f"{recommend_num}/{denom}" if not has_error else "-",
+                "recommendation": {"numerator": recommend_num, "denominator": denom if is_natural and not has_error else 0,
+                                   "value": f"{recommend_num}/{denom}" if is_natural and not has_error else "-",
                                    "strength": strength},
                 "sentiment": {"score": round(r.get("sentiment_score", 0.5), 4),
                               "label": r.get("sentiment_label", "neutral")},

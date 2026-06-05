@@ -172,6 +172,8 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
         for url_info in urls_list:
             if url_info.get("citation_type") != "url":
                 continue
+            if not db.is_ucloud_related_citation(r, url_info):
+                continue
             channel = url_info.get("source_channel", "其他") or "其他"
             url_content = url_info.get("content", "")
 

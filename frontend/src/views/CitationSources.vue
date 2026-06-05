@@ -87,7 +87,13 @@
           <template #header><strong>引用来源明细</strong></template>
           <el-table :data="filteredSources" stripe style="width:100%">
             <el-table-column prop="source" label="引用来源" min-width="180" />
-            <el-table-column prop="count" label="引用次数" width="110" sortable />
+            <el-table-column label="引用次数" width="110" sortable>
+              <template #default="{ row }">
+                <el-button type="primary" link size="small" @click="openDrilldown(row.source)">
+                  {{ row.count }}
+                </el-button>
+              </template>
+            </el-table-column>
             <el-table-column label="涉及渠道" min-width="220">
               <template #default="{ row }">
                 <el-tag v-for="p in row.platforms" :key="p.name" size="small" style="margin:2px" effect="plain">
@@ -105,6 +111,41 @@
             </el-table-column>
           </el-table>
         </el-card>
+
+        <!-- 下钻弹窗 -->
+        <el-dialog v-model="drilldownVisible" :title="`📎 ${drilldownSource} 引用详情`" width="820px" top="6vh">
+          <div v-if="drilldownLoading" style="text-align:center;padding:30px">
+            <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+            <p style="color:#64748b;margin-top:10px">正在加载...</p>
+          </div>
+          <template v-else>
+            <el-collapse v-for="(data, mk) in drilldownData" :key="mk">
+              <el-collapse-item :name="mk">
+                <template #title>
+                  <strong>{{ data.model_name }}</strong>
+                  <el-tag size="small" type="info" style="margin-left:8px">{{ data.questions.length }} 条引用</el-tag>
+                </template>
+                <el-table :data="data.questions" stripe size="small" style="width:100%">
+                  <el-table-column label="问题" min-width="200">
+                    <template #default="{ row }">
+                      <span>{{ row.question_text || row.question_id }}</span>
+                      <el-tag v-if="row.ucloud_mentioned" size="small" type="success" style="margin-left:6px">提及UCloud</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="引用链接" min-width="340">
+                    <template #default="{ row }">
+                      <div v-for="u in row.urls" :key="u.content" class="sample-url">
+                        <el-tag v-if="u.is_ucloud" size="small" type="success" style="margin-right:4px">UCloud</el-tag>
+                        <a :href="u.content" target="_blank">{{ u.content }}</a>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-collapse-item>
+            </el-collapse>
+            <el-empty v-if="!Object.keys(drilldownData).length" description="暂无引用详情" />
+          </template>
+        </el-dialog>
       </template>
     </template>
   </div>
@@ -123,6 +164,10 @@ const selectedPlatform = ref('all')
 const searchKeyword = ref('')
 const topSourceChartRef = ref(null)
 const platformPieChartRef = ref(null)
+const drilldownVisible = ref(false)
+const drilldownSource = ref('')
+const drilldownData = ref({})
+const drilldownLoading = ref(false)
 
 const platformColors = ['#5b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6']
 const fixedPlatforms = [
@@ -303,6 +348,36 @@ function renderPlatformPieChart() {
 }
 
 onMounted(loadData)
+
+async function openDrilldown(source) {
+  drilldownSource.value = source
+  drilldownVisible.value = true
+  drilldownLoading.value = true
+  drilldownData.value = {}
+
+  try {
+    const result = {}
+    for (const run of completedRuns.value) {
+      try {
+        const res = await apiFetch(`/results/${run.id}/citation-drilldown?source_channel=${encodeURIComponent(source)}`)
+        const data = res.data || {}
+        for (const [mk, modelData] of Object.entries(data)) {
+          if (!result[mk]) {
+            result[mk] = { model_name: modelData.model_name, questions: [] }
+          }
+          for (const q of modelData.questions) {
+            // 标记评测时间
+            q.run_date = toDateOnly(run.completed_at || run.started_at)
+            result[mk].questions.push(q)
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    drilldownData.value = result
+  } finally {
+    drilldownLoading.value = false
+  }
+}
 </script>
 
 <style scoped>

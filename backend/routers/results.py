@@ -221,7 +221,84 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
     return {"success": True, "data": by_model}
 
 
-@router.get("/{run_id}/question-drilldown")
+@router.get("/{run_id}/citation-drilldown")
+async def get_citation_drilldown(run_id: str, source_channel: str, model_key: str = None):
+    """引用来源下钻：查看某个引用来源渠道下具体哪些问题引用了它"""
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    all_results = await db.get_results(run_id, model_key)
+
+    # 关联 questions 表
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question, category FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = {"text": row["question"], "category": row["category"]}
+    finally:
+        await db_conn.close()
+
+    items = []
+    for r in all_results:
+        has_error = r.get("error_message") and r["error_message"] != ""
+        if has_error:
+            continue
+
+        # 合并 all_cited_urls 和 citations 里的 URL
+        all_urls = []
+        for field in ("all_cited_urls", "citations"):
+            raw = r.get(field, "[]")
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = []
+            elif isinstance(raw, list):
+                parsed = raw
+            else:
+                parsed = []
+            for item in parsed:
+                if isinstance(item, dict) and item.get("citation_type") == "url":
+                    all_urls.append(item)
+
+        # 匹配该 source_channel
+        matched_urls = []
+        for url_info in all_urls:
+            ch = url_info.get("source_channel", "其他") or "其他"
+            if ch == source_channel:
+                matched_urls.append(url_info)
+
+        if not matched_urls:
+            continue
+
+        q_info = question_map.get(r["question_id"], {})
+        items.append({
+            "question_id": r["question_id"],
+            "question_text": q_info.get("text", ""),
+            "category": q_info.get("category", ""),
+            "model_key": r["model_key"],
+            "model_name": r.get("model_name", r["model_key"]),
+            "ucloud_mentioned": bool(r.get("ucloud_mentioned")),
+            "urls": [
+                {
+                    "content": u.get("content", ""),
+                    "is_ucloud": bool(u.get("is_ucloud", False)),
+                }
+                for u in matched_urls
+            ],
+        })
+
+    # 按 model_key 分组
+    by_model = {}
+    for item in items:
+        mk = item["model_key"]
+        if mk not in by_model:
+            by_model[mk] = {"model_name": item["model_name"], "questions": []}
+        by_model[mk]["questions"].append(item)
+
+    return {"success": True, "data": by_model}
 async def get_question_drilldown(run_id: str, model_key: str):
     """问题级下钻：获取某渠道每道题的指标计数（分子/分母）和完整回答"""
     run = await db.get_run(run_id)

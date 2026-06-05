@@ -103,10 +103,10 @@
                   <span class="formula-trigger">ⓘ</span>
                 </el-tooltip>
               </div>
-              <div class="metric-value geo-value">{{ geoBestScore }}</div>
-              <div class="metric-best">最佳渠道: {{ geoBestModel || '-' }}</div>
+              <div class="metric-value geo-value">{{ geoAverageScore }}</div>
+              <div class="metric-best">基于5渠道平均指标</div>
               <div class="metric-bar-wrap">
-                <div class="metric-bar geo-bar" :style="{ width: geoBestScore + '%' }"></div>
+                <div class="metric-bar geo-bar" :style="{ width: geoAverageScore + '%' }"></div>
               </div>
             </el-card>
           </el-col>
@@ -607,14 +607,15 @@ const coreMetrics = computed(() => {
   })
 })
 
-function getBest(key) {
-  if (!scores.value.length) return null
-  return [...scores.value].sort((a, b) => b[key] - a[key])[0]
-}
-
-const geoBest = computed(() => getBest('geo_score'))
-const geoBestScore = computed(() => geoBest.value ? geoBest.value.geo_score.toFixed(1) : '-')
-const geoBestModel = computed(() => geoBest.value ? geoBest.value.model_name : '')
+const geoAverageRawScore = computed(() => {
+  if (!scores.value.length) return 0
+  const coverage = getMetricAverage('coverage_rate')
+  const citation = getMetricAverage('citation_rate')
+  const recommendation = getMetricAverage('recommendation_rate')
+  const sentiment = getMetricAverage('sentiment_score')
+  return (coverage * 0.45 + citation * 0.25 + recommendation * 0.20 + sentiment * 0.10) * 100
+})
+const geoAverageScore = computed(() => scores.value.length ? geoAverageRawScore.value.toFixed(1) : '-')
 
 // ===== 图表渲染 =====
 function renderChart(domRef, option) {

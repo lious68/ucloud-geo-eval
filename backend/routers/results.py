@@ -62,10 +62,10 @@ async def get_charts(run_id: str):
     all_results = await db.get_results(run_id)
     db_conn = await db.get_db()
     try:
-        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        cursor = await db_conn.execute("SELECT id, question, category FROM questions")
         natural_question_ids = {
             r["id"] for r in await cursor.fetchall()
-            if db.is_natural_question_text(r["question"])
+            if db.is_natural_question(r["question"], r["category"])
         }
     finally:
         await db_conn.close()
@@ -103,9 +103,9 @@ async def get_citation_details(run_id: str, model_key: str = None):
     db_conn = await db.get_db()
     question_map = {}
     try:
-        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        cursor = await db_conn.execute("SELECT id, question, category FROM questions")
         for row in await cursor.fetchall():
-            question_map[row["id"]] = row["question"]
+            question_map[row["id"]] = {"text": row["question"], "category": row["category"]}
     finally:
         await db_conn.close()
 
@@ -113,8 +113,9 @@ async def get_citation_details(run_id: str, model_key: str = None):
     by_model = {}
     for r in all_results:
         # 仅保留自然问题中按新口径贡献引用率的记录
-        question_text = question_map.get(r["question_id"], "")
-        if not db.is_natural_question_text(question_text):
+        q_info = question_map.get(r["question_id"], {})
+        question_text = q_info.get("text", "")
+        if not db.is_natural_question(question_text, q_info.get("category", "")):
             continue
         citations_list = db.get_effective_citations(r)
         if not citations_list:
@@ -150,16 +151,17 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
     db_conn = await db.get_db()
     question_map = {}
     try:
-        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        cursor = await db_conn.execute("SELECT id, question, category FROM questions")
         for row in await cursor.fetchall():
-            question_map[row["id"]] = row["question"]
+            question_map[row["id"]] = {"text": row["question"], "category": row["category"]}
     finally:
         await db_conn.close()
 
     by_model = {}
     for r in all_results:
-        question_text = question_map.get(r["question_id"], "")
-        if not db.is_natural_question_text(question_text) or not db.has_effective_citation(r):
+        q_info = question_map.get(r["question_id"], {})
+        question_text = q_info.get("text", "")
+        if not db.is_natural_question(question_text, q_info.get("category", "")) or not db.has_effective_citation(r):
             continue
 
         mk = r["model_key"]
@@ -263,7 +265,7 @@ async def get_question_drilldown(run_id: str, model_key: str):
         qid = r["question_id"]
         q_info = question_map.get(qid, {})
         question_text = q_info.get("text", qid)
-        if not db.is_natural_question_text(question_text):
+        if not db.is_natural_question(question_text, q_info.get("category", "")):
             continue
         has_error = r.get("error_message") and r["error_message"] != ""
 

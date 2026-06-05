@@ -237,7 +237,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
 
 @router.get("/{run_id}/question-drilldown")
 async def get_question_drilldown(run_id: str, model_key: str):
-    """问题级下钻：获取某渠道每道题的指标计数（分子/分母）和回答摘要"""
+    """问题级下钻：获取某渠道每道题的指标计数（分子/分母）和完整回答"""
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")
@@ -271,9 +271,8 @@ async def get_question_drilldown(run_id: str, model_key: str):
         recommend_num = 1 if r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3 and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
 
-        # 回答摘要
+        # 完整回答
         raw = r.get("raw_content", "") or ""
-        summary = raw[:200] + ("..." if len(raw) > 200 else "") if raw else ""
 
         questions.append({
             "question_id": qid,
@@ -294,7 +293,8 @@ async def get_question_drilldown(run_id: str, model_key: str):
             "mention_count": r.get("ucloud_mention_count", 0),
             "position_weight": r.get("position_weight", 0),
             "ucloud_rank": r.get("ucloud_rank"),
-            "response_summary": summary,
+            "response_content": raw,
+            "response_summary": raw,
             "has_error": has_error,
             "error_message": r.get("error_message") if has_error else None,
         })

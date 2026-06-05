@@ -125,8 +125,7 @@ async def get_citation_details(run_id: str, model_key: str = None):
 async def get_citation_channel_clustering(run_id: str, model_key: str = None):
     """引用来源渠道聚类统计
 
-    仅统计 ucloud_mentioned=1 的响应中的URL（对GEO评分有贡献），
-    按 URL 域名的来源渠道聚类汇总
+    统计所有响应中的URL引用来源（不区分厂商），按 URL 域名聚类汇总
     """
     run = await db.get_run(run_id)
     if not run:
@@ -134,7 +133,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
 
     all_results = await db.get_results(run_id, model_key)
 
-    # 关联 questions 表，引用渠道按全部有效问题统计
+    # 关联 questions 表
     db_conn = await db.get_db()
     question_map = {}
     try:
@@ -146,8 +145,8 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
 
     by_model = {}
     for r in all_results:
-        q_info = question_map.get(r["question_id"], {})
-        if not db.has_effective_citation(r):
+        has_error = r.get("error_message") and r["error_message"] != ""
+        if has_error:
             continue
 
         mk = r["model_key"]
@@ -157,7 +156,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
                 "channels": {},  # channel_name -> {count, sample_urls}
             }
 
-        # 解析 all_cited_urls JSON
+        # 解析 all_cited_urls JSON — 统计所有URL引用来源
         urls_raw = r.get("all_cited_urls", "[]")
         if isinstance(urls_raw, str):
             try:
@@ -172,8 +171,6 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
         for url_info in urls_list:
             if url_info.get("citation_type") != "url":
                 continue
-            if not db.is_ucloud_related_citation(r, url_info):
-                continue
             channel = url_info.get("source_channel", "其他") or "其他"
             url_content = url_info.get("content", "")
 
@@ -184,7 +181,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
             if len(by_model[mk]["channels"][channel]["sample_urls"]) < 5:
                 by_model[mk]["channels"][channel]["sample_urls"].append(url_content)
 
-        # 也统计 citations 中 UCloud 的引用
+        # 也统计 citations 中的引用
         cits_raw = r.get("citations", "[]")
         if isinstance(cits_raw, str):
             try:
@@ -202,7 +199,6 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
             channel = cit.get("source_channel", "其他") or "其他"
             url_content = cit.get("content", "")
 
-            # UCloud引用可能在 all_cited_urls 中被跳过了（位置去重），这里补上
             # 检查是否已统计
             existing_urls = by_model[mk]["channels"].get(channel, {}).get("sample_urls", [])
             if channel not in by_model[mk]["channels"]:

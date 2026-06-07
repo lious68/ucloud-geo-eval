@@ -58,7 +58,7 @@
     </el-card>
 
     <!-- 评分权重 -->
-    <el-card>
+    <el-card style="margin-bottom:20px">
       <template #header><strong>⚖️ 评分权重配置</strong></template>
       <el-form label-width="120px">
         <el-form-item v-for="(label, key) in weightLabels" :key="key" :label="label">
@@ -68,6 +68,38 @@
           <el-button type="primary" @click="saveWeights">保存权重</el-button>
         </el-form-item>
       </el-form>
+    </el-card>
+
+    <!-- WebChat 登录状态管理 -->
+    <el-card>
+      <template #header><strong>🌐 WebChat 登录状态管理</strong></template>
+      <el-alert type="info" :closable="false" style="margin-bottom:16px">
+        WebChat 评测模式通过浏览器自动化模拟真实用户在各 AI 官网提问，模型会联网搜索并引用真实来源。<br/>
+        使用步骤：① 本机运行登录脚本 → ② 手动登录网站 → ③ 保存认证文件 → ④ 上传到服务器
+      </el-alert>
+      <el-table :data="webchatModels" stripe>
+        <el-table-column prop="name" label="模型" width="120" />
+        <el-table-column prop="url" label="网站" min-width="220" />
+        <el-table-column label="登录状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="row.status_type" size="small">{{ row.status_label }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="280">
+          <template #default="{ row }">
+            <el-upload
+              :show-file-list="false"
+              accept=".json"
+              :before-upload="(f) => uploadAuth(row.model_key, f)"
+              style="display:inline-block"
+            >
+              <el-button size="small" type="primary">上传认证</el-button>
+            </el-upload>
+            <el-button size="small" @click="validateAuth(row.model_key)">验证</el-button>
+            <el-button size="small" type="danger" plain @click="deleteAuth(row.model_key)">清除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-card>
   </div>
 </template>
@@ -84,6 +116,8 @@ const mvKeyPreview = ref('')
 const mvLoading = ref(false)
 const weights = reactive({ coverage_rate: 0.45, mention_rate: 0.0, citation_rate: 0.25, recommendation_rate: 0.20, sentiment_score: 0.10 })
 const weightLabels = { coverage_rate: '提及率', mention_rate: '原提及频次', citation_rate: '引用率', recommendation_rate: 'TOP3 推荐率', sentiment_score: '情感值' }
+const webchatModels = ref([])
+const webchatRawStatus = ref({})
 
 async function loadModels() {
   try {
@@ -94,6 +128,55 @@ async function loadModels() {
     mvBaseUrl.value = data.modelverse_base_url || mvBaseUrl.value
     mvKeyPreview.value = data.modelverse_api_key_preview || ''
   } catch (e) { console.error(e) }
+}
+
+async function loadWebchatStatus() {
+  try {
+    const res = await apiFetch('/webchat/auth/status')
+    webchatRawStatus.value = res.data || {}
+    // 构建显示列表
+    const supported = ['kimi', 'deepseek']
+    webchatModels.value = Object.entries(webchatRawStatus.value).map(([key, info]) => ({
+      model_key: key,
+      name: info.name,
+      url: info.url,
+      has_auth: info.has_auth,
+      is_valid: false,  // 需要验证才知道
+      status_type: supported.includes(key) ? (info.has_auth ? 'warning' : 'danger') : 'info',
+      status_label: supported.includes(key) ? (info.has_auth ? '已上传（待验证）' : '未登录') : '暂不支持',
+    }))
+  } catch (e) { console.error(e) }
+}
+
+async function uploadAuth(modelKey, file) {
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await apiFetch(`/webchat/auth/upload/${modelKey}`, {
+      method: 'POST',
+      body: formData,
+    })
+    ElMessage.success(`${res.data.name} 认证状态已上传`)
+    await loadWebchatStatus()
+  } catch (e) { ElMessage.error(e.message) }
+  return false  // 阻止 el-upload 默认上传
+}
+
+async function validateAuth(modelKey) {
+  try {
+    const res = await apiFetch(`/webchat/auth/validate/${modelKey}`, { method: 'POST' })
+    const { is_valid, cookie_count } = res.data
+    ElMessage.success(is_valid ? `认证有效 (${cookie_count} 个 cookie)` : '认证已过期，请重新登录上传')
+    await loadWebchatStatus()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function deleteAuth(modelKey) {
+  try {
+    await apiFetch(`/webchat/auth/${modelKey}`, { method: 'DELETE' })
+    ElMessage.success('认证状态已清除')
+    await loadWebchatStatus()
+  } catch (e) { ElMessage.error(e.message) }
 }
 
 async function loadWeights() {
@@ -153,7 +236,7 @@ async function saveWeights() {
   } catch (e) { ElMessage.error(e.message) }
 }
 
-onMounted(() => { loadModels(); loadWeights() })
+onMounted(() => { loadModels(); loadWeights(); loadWebchatStatus() })
 </script>
 
 <style scoped>

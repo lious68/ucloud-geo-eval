@@ -14,6 +14,7 @@ class EvaluationCreate(BaseModel):
     categories: Optional[List[str]] = None    # 按品类筛选
     temperature: float = 0.7
     delay: float = 1.0
+    mode: str = "api"  # "api" 或 "webchat"
 
 
 class EvaluationResponse(BaseModel):

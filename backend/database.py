@@ -119,7 +119,8 @@ CREATE TABLE IF NOT EXISTS evaluation_runs (
     completed_questions INTEGER DEFAULT 0,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    config TEXT
+    config TEXT,
+    mode TEXT DEFAULT 'api'
 );
 
 CREATE TABLE IF NOT EXISTS analysis_results (
@@ -224,6 +225,13 @@ async def _migrate_add_columns(db: aiosqlite.Connection):
         except aiosqlite.OperationalError:
             pass  # 列已存在
 
+    # 添加 mode 列到 evaluation_runs
+    try:
+        await db.execute("ALTER TABLE evaluation_runs ADD COLUMN mode TEXT DEFAULT 'api'")
+        await db.commit()
+    except aiosqlite.OperationalError:
+        pass  # 列已存在
+
 
 async def _import_default_questions(db: aiosqlite.Connection):
     """导入默认问题集"""
@@ -242,15 +250,15 @@ async def _import_default_questions(db: aiosqlite.Connection):
 # ============ 评测运行 ============
 
 async def create_run(run_id: str, name: str, model_keys: List[str],
-                     question_ids: List[str], config: Dict = None):
+                     question_ids: List[str], config: Dict = None, mode: str = "api"):
     """创建评测运行"""
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO evaluation_runs (id, name, status, model_keys, question_ids, total_questions, config)
-               VALUES (?, ?, 'pending', ?, ?, ?, ?)""",
+            """INSERT INTO evaluation_runs (id, name, status, model_keys, question_ids, total_questions, config, mode)
+               VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)""",
             (run_id, name, json.dumps(model_keys), json.dumps(question_ids),
-             len(question_ids) * len(model_keys), json.dumps(config or {}))
+             len(question_ids) * len(model_keys), json.dumps(config or {}), mode)
         )
         await db.commit()
     finally:

@@ -18,6 +18,12 @@
             </template>
           </el-table-column>
           <el-table-column prop="name" label="名称" width="140" />
+          <el-table-column label="模式" width="80">
+            <template #default="{ row }">
+              <el-tag v-if="row.mode === 'webchat'" type="info" size="small">🌐 WebChat</el-tag>
+              <el-tag v-else size="small">API</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>

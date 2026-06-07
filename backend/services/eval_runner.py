@@ -45,6 +45,7 @@ async def start_evaluation(
     temperature: float = 0.7,
     delay: float = 1.0,
     ws_manager=None,
+    mode: str = "api",
 ) -> str:
     """启动异步评测任务"""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
@@ -91,17 +92,19 @@ async def start_evaluation(
         if saved_key or (env_key and not env_key.startswith("your_")):
             available_models.append(mk)
 
-    if not available_models:
+    if mode == "api" and not available_models:
         raise ValueError("没有可用的模型（API Key未配置）")
 
     actual_q_ids = [q["id"] for q in q_list]
-    await create_run(run_id, name, available_models, actual_q_ids, {
-        "temperature": temperature, "delay": delay
-    })
+    await create_run(run_id, name, available_models if mode == "api" else model_keys,
+                     actual_q_ids, {
+        "temperature": temperature, "delay": delay, "mode": mode
+    }, mode=mode)
 
     # 启动后台任务
     task = asyncio.create_task(
-        _run_evaluation(run_id, available_models, q_list, temperature, delay, ws_manager)
+        _run_evaluation(run_id, available_models if mode == "api" else model_keys,
+                        q_list, temperature, delay, ws_manager, mode)
     )
     _active_tasks[run_id] = task
 
@@ -115,11 +118,27 @@ async def _run_evaluation(
     temperature: float,
     delay: float,
     ws_manager=None,
+    mode: str = "api",
 ):
     """执行评测的核心逻辑"""
     await update_run_status(run_id, "running")
     analyzer = ResponseAnalyzer()
     calculator = MetricsCalculator()
+
+    # WebChat 模式的浏览器客户端管理
+    webchat_clients: Dict[str, Any] = {}
+    if mode == "webchat":
+        from web_chat_clients import create_web_chat_client
+        for mk in model_keys:
+            client = create_web_chat_client(mk)
+            if not client.is_configured:
+                logger.warning(f"WebChat {mk}: 无认证状态，跳过")
+                continue
+            initialized = await client.initialize()
+            if not initialized:
+                logger.warning(f"WebChat {mk}: 浏览器启动失败，跳过")
+                continue
+            webchat_clients[mk] = client
 
     total = len(questions) * len(model_keys)
     completed = 0
@@ -129,40 +148,91 @@ async def _run_evaluation(
 
     try:
         for mk in model_keys:
-            # 创建模型客户端
-            client = await _create_model_client(mk, temperature)
-            if not client or not client.is_configured:
-                # 跳过不可用的模型
+            # WebChat 模式：使用浏览器客户端
+            if mode == "webchat" and mk in webchat_clients:
+                wc_client = webchat_clients[mk]
                 for q in questions:
-                    result_dict = _empty_result(q["id"], mk, "API key not configured")
+                    try:
+                        response = await wc_client.chat(q["question"])
+
+                        analysis = analyzer.analyze(
+                            question_id=q["id"],
+                            model_key=mk,
+                            model_name=wc_client.name,
+                            content=response.get("content", ""),
+                            error=response.get("error"),
+                        )
+
+                        result_dict = _analysis_to_dict(analysis)
+                        await save_analysis_result(run_id, result_dict)
+                        all_results[mk].append(result_dict)
+
+                    except Exception as e:
+                        logger.error(f"WebChat error querying {mk} for {q['id']}: {e}")
+                        result_dict = _empty_result(q["id"], mk, str(e))
+                        await save_analysis_result(run_id, result_dict)
+                        all_results[mk].append(result_dict)
+
+                    completed += 1
+                    await update_run_status(run_id, "running", completed)
+
+                    if ws_manager:
+                        await ws_manager.broadcast(run_id, {
+                            "type": "progress",
+                            "run_id": run_id,
+                            "completed": completed,
+                            "total": total,
+                            "current_model": mk,
+                            "current_question": q["id"],
+                        })
+
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+            elif mode == "webchat" and mk not in webchat_clients:
+                # 无认证状态的模型，跳过
+                for q in questions:
+                    result_dict = _empty_result(q["id"], mk, "WebChat 未配置登录状态")
                     await save_analysis_result(run_id, result_dict)
                     all_results[mk].append(result_dict)
                     completed += 1
                 continue
 
-            for q in questions:
-                try:
-                    # 发送请求
-                    response = client.chat(q["question"])
+            else:
+                # API 模式：使用 OpenAI 兼容客户端
+                client = await _create_model_client(mk, temperature)
+                if not client or not client.is_configured:
+                    # 跳过不可用的模型
+                    for q in questions:
+                        result_dict = _empty_result(q["id"], mk, "API key not configured")
+                        await save_analysis_result(run_id, result_dict)
+                        all_results[mk].append(result_dict)
+                        completed += 1
+                    continue
 
-                    # 分析响应
-                    analysis = analyzer.analyze(
-                        question_id=q["id"],
-                        model_key=mk,
-                        model_name=client.name,
-                        content=response.get("content", ""),
-                        error=response.get("error"),
-                    )
+                for q in questions:
+                    try:
+                        # 发送请求
+                        response = client.chat(q["question"])
 
-                    result_dict = _analysis_to_dict(analysis)
-                    await save_analysis_result(run_id, result_dict)
-                    all_results[mk].append(result_dict)
+                        # 分析响应
+                        analysis = analyzer.analyze(
+                            question_id=q["id"],
+                            model_key=mk,
+                            model_name=client.name,
+                            content=response.get("content", ""),
+                            error=response.get("error"),
+                        )
 
-                except Exception as e:
-                    logger.error(f"Error querying {mk} for {q['id']}: {e}")
-                    result_dict = _empty_result(q["id"], mk, str(e))
-                    await save_analysis_result(run_id, result_dict)
-                    all_results[mk].append(result_dict)
+                        result_dict = _analysis_to_dict(analysis)
+                        await save_analysis_result(run_id, result_dict)
+                        all_results[mk].append(result_dict)
+
+                    except Exception as e:
+                        logger.error(f"Error querying {mk} for {q['id']}: {e}")
+                        result_dict = _empty_result(q["id"], mk, str(e))
+                        await save_analysis_result(run_id, result_dict)
+                        all_results[mk].append(result_dict)
 
                 completed += 1
                 await update_run_status(run_id, "running", completed)
@@ -178,10 +248,7 @@ async def _run_evaluation(
                         "current_question": q["id"],
                     })
 
-                if delay > 0:
-                    await asyncio.sleep(delay)
-
-        # 计算GEO评分
+                # 计算GEO评分
         for mk in model_keys:
             if not all_results[mk]:
                 continue
@@ -225,6 +292,17 @@ async def _run_evaluation(
         await update_run_status(run_id, "failed")
         if ws_manager:
             await ws_manager.broadcast(run_id, {
+                "type": "failed",
+                "run_id": run_id,
+                "error": str(e),
+            })
+
+    finally:
+        # 关闭 WebChat 浏览器
+        if mode == "webchat":
+            for mk, wc_client in webchat_clients.items():
+                await wc_client.close()
+            logger.info("WebChat browsers closed")
                 "type": "failed",
                 "run_id": run_id,
                 "error": str(e),

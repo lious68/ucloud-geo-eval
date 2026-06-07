@@ -43,6 +43,7 @@ async def create_evaluation(req: models.EvaluationCreate):
             temperature=req.temperature,
             delay=req.delay,
             ws_manager=ws_manager,
+            mode=req.mode,
         )
         return {"success": True, "data": {"run_id": run_id}}
     except ValueError as e:

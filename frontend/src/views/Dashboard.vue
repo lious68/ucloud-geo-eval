@@ -322,18 +322,31 @@
           </el-col>
           <el-col :span="10">
             <el-card>
-              <template #header><strong>渠道 × 模型 引用矩阵</strong></template>
-              <el-table :data="channelMatrixData" stripe size="small" style="width:100%">
-                <el-table-column prop="channel" label="来源渠道" width="110" fixed />
-                <el-table-column v-for="col in channelMatrixCols" :key="col" :label="col" width="80" align="center">
-                  <template #default="{ row }">{{ row[col] || 0 }}</template>
-                </el-table-column>
-                <el-table-column label="合计" width="70" align="center">
-                  <template #default="{ row }">
-                    <strong>{{ channelMatrixCols.reduce((s, c) => s + (row[c] || 0), 0) }}</strong>
+              <template #header><strong>渠道引用明细（点击渠道展开）</strong></template>
+              <el-collapse v-model="activeChannelPanels" accordion>
+                <el-collapse-item v-for="item in allChannelFlat" :key="item.key" :name="item.key">
+                  <template #title>
+                    <span class="channel-collapse-title">{{ item.channel }}</span>
+                    <el-tag size="small" style="margin-left:6px">{{ item.totalCount }} 条引用</el-tag>
                   </template>
-                </el-table-column>
-              </el-table>
+                  <el-table :data="item.details" stripe size="small" style="width:100%">
+                    <el-table-column label="模型" width="80">
+                      <template #default="{ row }">{{ row.model_name }}</template>
+                    </el-table-column>
+                    <el-table-column label="问题" min-width="180">
+                      <template #default="{ row }">
+                        <span class="channel-q-text">{{ row.question_text || row.question_id }}</span>
+                        <el-tag size="small" style="margin-left:4px">{{ row.question_category }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="引用URL" min-width="260">
+                      <template #default="{ row }">
+                        <a :href="row.url" target="_blank" class="channel-url">{{ row.url }}</a>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-collapse-item>
+              </el-collapse>
             </el-card>
           </el-col>
         </el-row>
@@ -460,37 +473,40 @@ const channelChartRef = ref(null)
 const hasCitationData = computed(() => Object.keys(citationDetails.value).length > 0)
 const hasChannelData = computed(() => Object.keys(channelClustering.value).length > 0)
 
-// 渠道聚类矩阵数据（用于表格）
-const channelMatrixCols = computed(() => {
-  const names = new Set()
-  for (const mk in channelClustering.value) {
-    names.add(channelClustering.value[mk].model_name)
-  }
-  return [...names]
-})
+// 渠道聚类矩阵数据（用于折叠列表）
+const activeChannelPanels = ref([])
 
-const channelMatrixData = computed(() => {
-  // 收集所有渠道名
-  const channelSet = new Set()
+const allChannelFlat = computed(() => {
+  // 收集所有渠道，合并跨模型，为每个渠道列出所有 question_details
+  const channelMap = {} // channel -> { details: [{model_name, question_text, question_category, url}], totalCount }
+
   for (const mk in channelClustering.value) {
+    const model_name = channelClustering.value[mk].model_name
     for (const ch of channelClustering.value[mk].channels) {
-      channelSet.add(ch.channel)
+      if (!channelMap[ch.channel]) {
+        channelMap[ch.channel] = { details: [], totalCount: 0 }
+      }
+      channelMap[ch.channel].totalCount += ch.count
+      for (const d of (ch.question_details || [])) {
+        channelMap[ch.channel].details.push({
+          model_name,
+          question_id: d.question_id,
+          question_text: d.question_text,
+          question_category: d.question_category,
+          url: d.url,
+        })
+      }
     }
   }
-  // 构建矩阵行
-  return [...channelSet].map(channel => {
-    const row = { channel }
-    for (const mk in channelClustering.value) {
-      const mn = channelClustering.value[mk].model_name
-      const found = channelClustering.value[mk].channels.find(c => c.channel === channel)
-      row[mn] = found ? found.count : 0
-    }
-    return row
-  }).sort((a, b) => {
-    const totalA = channelMatrixCols.value.reduce((s, c) => s + (a[c] || 0), 0)
-    const totalB = channelMatrixCols.value.reduce((s, c) => s + (b[c] || 0), 0)
-    return totalB - totalA
-  })
+
+  return Object.entries(channelMap)
+    .map(([channel, data]) => ({
+      key: channel,
+      channel,
+      totalCount: data.totalCount,
+      details: data.details,
+    }))
+    .sort((a, b) => b.totalCount - a.totalCount)
 })
 
 const radarRef = ref(null), barRef = ref(null), coverageRef = ref(null), sentimentRef = ref(null)
@@ -850,6 +866,10 @@ onMounted(loadData)
 
 /* ===== 渠道聚类区 ===== */
 .channel-clustering-section .el-card { height: 100%; }
+.channel-collapse-title { font-weight: 600; font-size: 14px; }
+.channel-q-text { font-size: 12px; color: #333; }
+.channel-url { color: #409eff; text-decoration: none; font-size: 12px; word-break: break-all; }
+.channel-url:hover { text-decoration: underline; }
 
 /* ===== 下钻抽屉 ===== */
 .drilldown-header { margin-bottom: 12px; font-size: 14px; color: #333; }

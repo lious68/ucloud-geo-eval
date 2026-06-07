@@ -140,13 +140,25 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
     """引用来源渠道聚类统计
 
     仅统计 ucloud_mentioned=1 的响应中的URL（对GEO评分有贡献），
-    按 URL 域名的来源渠道聚类汇总
+    按 URL 域名的来源渠道聚类汇总，附带每条引用的问题和完整URL
     """
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")
 
     all_results = await db.get_results(run_id, model_key)
+
+    # 关联 questions 表获取题目文本
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question, category, question_type FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = {
+                "text": row["question"], "category": row["category"], "type": row["question_type"]
+            }
+    finally:
+        await db_conn.close()
 
     by_model = {}
     for r in all_results:
@@ -155,10 +167,13 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
             continue
 
         mk = r["model_key"]
+        qid = r["question_id"]
+        q_info = question_map.get(qid, {})
+
         if mk not in by_model:
             by_model[mk] = {
                 "model_name": r.get("model_name", mk),
-                "channels": {},  # channel_name -> {count, sample_urls}
+                "channels": {},  # channel_name -> {count, question_details}
             }
 
         # 解析 all_cited_urls JSON
@@ -171,7 +186,9 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
         elif isinstance(urls_raw, list):
             urls_list = urls_raw
         else:
-            urls_list = []
+                urls_list = []
+
+        seen_urls_this_question = set()
 
         for url_info in urls_list:
             if url_info.get("citation_type") != "url":
@@ -179,12 +196,19 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
             channel = url_info.get("source_channel", "其他") or "其他"
             url_content = url_info.get("content", "")
 
+            if url_content in seen_urls_this_question:
+                continue
+            seen_urls_this_question.add(url_content)
+
             if channel not in by_model[mk]["channels"]:
-                by_model[mk]["channels"][channel] = {"count": 0, "sample_urls": []}
+                by_model[mk]["channels"][channel] = {"count": 0, "question_details": []}
             by_model[mk]["channels"][channel]["count"] += 1
-            # 最多保留5个示例URL
-            if len(by_model[mk]["channels"][channel]["sample_urls"]) < 5:
-                by_model[mk]["channels"][channel]["sample_urls"].append(url_content)
+            by_model[mk]["channels"][channel]["question_details"].append({
+                "question_id": qid,
+                "question_text": q_info.get("text", qid),
+                "question_category": q_info.get("category", ""),
+                "url": url_content,
+            })
 
         # 也统计 citations 中 UCloud 的引用
         cits_raw = r.get("citations", "[]")
@@ -204,21 +228,24 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
             channel = cit.get("source_channel", "其他") or "其他"
             url_content = cit.get("content", "")
 
-            # UCloud引用可能在 all_cited_urls 中被跳过了（位置去重），这里补上
-            # 检查是否已统计
-            existing_urls = by_model[mk]["channels"].get(channel, {}).get("sample_urls", [])
+            if url_content in seen_urls_this_question:
+                continue
+            seen_urls_this_question.add(url_content)
+
             if channel not in by_model[mk]["channels"]:
-                by_model[mk]["channels"][channel] = {"count": 0, "sample_urls": []}
-            # 避免重复计数：通过URL内容去重
-            if url_content not in existing_urls or by_model[mk]["channels"][channel]["count"] == 0:
-                by_model[mk]["channels"][channel]["count"] += 1
-                if len(by_model[mk]["channels"][channel]["sample_urls"]) < 5 and url_content not in existing_urls:
-                    by_model[mk]["channels"][channel]["sample_urls"].append(url_content)
+                by_model[mk]["channels"][channel] = {"count": 0, "question_details": []}
+            by_model[mk]["channels"][channel]["count"] += 1
+            by_model[mk]["channels"][channel]["question_details"].append({
+                "question_id": qid,
+                "question_text": q_info.get("text", qid),
+                "question_category": q_info.get("category", ""),
+                "url": url_content,
+            })
 
     # 转换 channels dict 为列表并排序
     for mk_data in by_model.values():
         channels_list = [
-            {"channel": ch, "count": info["count"], "sample_urls": info["sample_urls"]}
+            {"channel": ch, "count": info["count"], "question_details": info["question_details"]}
             for ch, info in mk_data["channels"].items()
         ]
         channels_list.sort(key=lambda x: x["count"], reverse=True)

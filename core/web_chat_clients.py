@@ -278,34 +278,38 @@ class KimiWebChatClient(WebChatClientBase):
             # 可能没有搜索指示器，直接继续
             pass
 
-        # 文本稳定
+        # 等响应区域出现 + 文本稳定
+        # Kimi 的响应在 segment.segment-assistant 中
+        await page.wait_for_selector("segment.segment-assistant, .segment-assistant", timeout=60000)
         await self._wait_for_text_stability(
-            page, self.RESPONSE_SELECTOR, timeout=timeout
+            page, "segment.segment-assistant, .segment-assistant", timeout=timeout
         )
 
     async def _extract_response(self, page: Page) -> str:
         """提取 Kimi 响应文本，包括引用链接
 
-        Kimi 的引用格式：搜索结果卡片 + 正文中 [1][2] 等引用标记
-        需要把引用链接嵌入到正文中，使 ResponseAnalyzer 能识别
+        Kimi 的响应在 segment.segment-assistant 中，markdown-container 包含正文
         """
-        # 等响应区域出现
+        # 找到响应区域：segment-assistant
         try:
-            response_area = page.locator(self.RESPONSE_SELECTOR).last
+            response_area = page.locator("segment.segment-assistant, .segment-assistant").last
             await response_area.wait_for(state="visible", timeout=10000)
         except Exception:
-            # 回退：获取最后一个消息元素
-            response_area = page.locator("[class*='message']").last
+            # 回退：用 markdown-container
+            try:
+                response_area = page.locator(".markdown-container, .markdown").last
+                await response_area.wait_for(state="visible", timeout=10000)
+            except Exception:
+                # 最终回退：返回空字符串
+                return ""
 
         # 提取纯文本
         text = await response_area.inner_text()
 
-        # 提取所有 <a href> 链接，嵌入到文本中
-        links = await page.evaluate("""
-            () => {
-                const responseEl = document.querySelector('[class*="markdown"], [class*="message-content"], [class*="assistant"]');
-                if (!responseEl) return [];
-                const links = responseEl.querySelectorAll('a[href]');
+        # 提取所有 <a href> 链接
+        links = await response_area.evaluate("""
+            el => {
+                const links = el.querySelectorAll('a[href]');
                 return Array.from(links).map(a => ({
                     text: a.textContent.trim(),
                     href: a.href
@@ -318,7 +322,6 @@ class KimiWebChatClient(WebChatClientBase):
             citation_lines = []
             for i, link in enumerate(links):
                 href = link["href"]
-                # 过滤掉站内导航链接和 javascript:
                 if href.startswith("javascript:") or href.startswith("#"):
                     continue
                 if "kimi.com" in href and "/chat" in href:

@@ -33,6 +33,7 @@ PUBLIC_PATHS = [
     "/api/results",
     "/api/questions/categories",
     "/api/questions/types",
+    "/api/webchat/auth/status",
     "/docs",
     "/openapi.json",
     "/redoc",

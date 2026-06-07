@@ -75,7 +75,21 @@
         <div style="margin-top:12px;font-size:16px">{{ statusText }}</div>
         <el-tag v-if="form.mode === 'webchat'" type="info" style="margin-top:8px">🌐 WebChat 模式</el-tag>
       </div>
-      <el-timeline>
+
+      <!-- 活跃状态心跳指示器 -->
+      <div class="heartbeat-row">
+        <span :class="heartbeatActive ? 'heartbeat-dot active' : 'heartbeat-dot inactive'"></span>
+        <span v-if="heartbeatActive" style="color:#10b981;font-size:13px">进程活跃 · 正在执行中</span>
+        <span v-else style="color:#ef4444;font-size:13px">
+          {{ heartbeatStalled ? '⚠️ 进程可能挂了 · 已超过120秒无更新' : '等待首次进度...' }}
+        </span>
+        <span style="color:#999;font-size:12px;margin-left:12px">上次更新: {{ lastUpdateTime || '—' }}</span>
+        <el-button v-if="heartbeatStalled" size="small" type="warning" style="margin-left:8px" @click="checkStatus">
+          检查状态
+        </el-button>
+      </div>
+
+      <el-timeline style="margin-top:16px">
         <el-timeline-item v-for="(log, i) in logs" :key="i" :timestamp="log.time" placement="top">
           {{ log.text }}
         </el-timeline-item>
@@ -85,7 +99,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { apiFetch, useWebSocket } from '../composables/useWebSocket'
@@ -101,6 +115,10 @@ const progress = ref(0)
 const statusText = ref('')
 const logs = ref([])
 const runId = ref('')
+const lastUpdateTime = ref('')
+const heartbeatActive = ref(false)
+const heartbeatStalled = ref(false)
+let heartbeatTimer = null
 
 const form = ref({
   name: 'GEO评估',
@@ -123,11 +141,11 @@ const displayModels = computed(() => {
     const ws = webchatStatus.value[m.key] || {}
     let webchat_status = 'no_auth'
     if (m.key !== 'kimi' && m.key !== 'deepseek') {
-      webchat_status = 'stub'  // 暂不支持
+      webchat_status = 'stub'
     } else if (ws.has_auth && ws.is_valid) {
       webchat_status = 'ready'
     } else if (ws.has_auth) {
-      webchat_status = 'ready'  // 有认证文件即可使用，后续评测时再实际验证
+      webchat_status = 'ready'
     }
     return { ...m, webchat_status }
   })
@@ -139,19 +157,14 @@ async function loadConfig() {
     const mData = mRes.data || {}
     models.value = mData.models || mData || []
 
-    // 获取品类
     const cRes = await apiFetch('/questions/categories')
     categories.value = cRes.data || []
 
-    // 获取 WebChat 认证状态
     const wsRes = await apiFetch('/webchat/auth/status')
     webchatStatus.value = wsRes.data || {}
 
-    // 根据模式自动勾选可用模型
     onModeChange(form.value.mode)
-  } catch (e) {
-    console.error('loadConfig error:', e)
-  }
+  } catch (e) { console.error('loadConfig error:', e) }
 }
 
 function onModeChange(mode) {
@@ -161,6 +174,69 @@ function onModeChange(mode) {
   } else {
     form.value.delay = 8
     form.value.model_keys = displayModels.value.filter(m => m.webchat_status === 'ready').map(m => m.key)
+  }
+}
+
+// 心跳检测：每30秒检查是否收到过进度更新
+function startHeartbeat() {
+  heartbeatActive.value = false
+  heartbeatStalled.value = false
+  let secondsSinceUpdate = 0
+
+  heartbeatTimer = setInterval(() => {
+    if (lastUpdateTime.value) {
+      secondsSinceUpdate += 30
+    } else {
+      secondsSinceUpdate += 30
+    }
+
+    if (secondsSinceUpdate > 120) {
+      heartbeatActive.value = false
+      heartbeatStalled.value = true
+    }
+  }, 30000)
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
+}
+
+function onProgressReceived() {
+  heartbeatActive.value = true
+  heartbeatStalled.value = false
+  lastUpdateTime.value = new Date().toLocaleTimeString()
+}
+
+async function checkStatus() {
+  try {
+    const res = await apiFetch(`/evaluations/${runId.value}`)
+    const run = res.data
+    if (run.status === 'completed') {
+      progress.value = 100
+      statusText.value = '评测已完成'
+      heartbeatActive.value = false
+      heartbeatStalled.value = false
+      stopHeartbeat()
+      disconnect()
+      setTimeout(() => router.push('/dashboard'), 1500)
+    } else if (run.status === 'failed') {
+      statusText.value = `评测失败`
+      heartbeatActive.value = false
+      heartbeatStalled.value = false
+      stopHeartbeat()
+      disconnect()
+    } else if (run.status === 'running') {
+      heartbeatActive.value = true
+      heartbeatStalled.value = false
+      ElMessage.info(`评测仍在运行，已完成 ${run.completed_questions}/${run.total_questions} 题`)
+    } else {
+      ElMessage.info(`评测状态: ${run.status}`)
+    }
+  } catch (e) {
+    ElMessage.error('无法获取评测状态: ' + e.message)
   }
 }
 
@@ -187,6 +263,8 @@ async function startEval() {
     logs.value = []
     progress.value = 0
     statusText.value = '正在启动评测...'
+    lastUpdateTime.value = ''
+    startHeartbeat()
 
     const res = await apiFetch('/evaluations', {
       method: 'POST',
@@ -205,25 +283,39 @@ async function startEval() {
         progress.value = Math.round(data.completed / data.total * 100)
         statusText.value = `${data.current_model} - ${data.current_question}`
         logs.value.unshift({ time: new Date().toLocaleTimeString(), text: `${data.current_model} → ${data.current_question} (${data.completed}/${data.total})` })
+        onProgressReceived()
       } else if (data.type === 'completed') {
         progress.value = 100
         statusText.value = '评测完成！'
+        heartbeatActive.value = false
+        heartbeatStalled.value = false
+        stopHeartbeat()
         disconnect()
         setTimeout(() => router.push('/dashboard'), 1500)
       } else if (data.type === 'failed') {
         statusText.value = `评测失败: ${data.error}`
+        heartbeatActive.value = false
+        heartbeatStalled.value = false
+        stopHeartbeat()
         disconnect()
       }
     })
   } catch (e) {
     ElMessage.error(e.message)
     running.value = false
+    stopHeartbeat()
   }
 }
 
 onMounted(loadConfig)
+onUnmounted(stopHeartbeat)
 </script>
 
 <style scoped>
 .page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
+.heartbeat-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.heartbeat-dot { width: 10px; height: 10px; border-radius: 50%; }
+.heartbeat-dot.active { background: #10b981; animation: pulse 1.5s ease-in-out infinite; }
+.heartbeat-dot.inactive { background: #ef4444; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 </style>

@@ -219,29 +219,30 @@ class WebChatClientBase:
 
 
 class KimiWebChatClient(WebChatClientBase):
-    """Kimi (kimi.moonshot.cn) WebChat 客户端
+    """Kimi (www.kimi.com) WebChat 客户端
 
     Kimi 自动联网搜索，无需手动开启搜索模式。
     响应特点：搜索时会显示"搜索中..."提示，完成后有引用卡片。
+    注意：Kimi 已从 kimi.moonshot.cn 迁移到 www.kimi.com
     """
 
     # ── Kimi 页面选择器 ──
     # 注：这些选择器需要根据 Kimi 网站实际 DOM 调整
-    INPUT_SELECTOR = "textarea[class*='chat-input'], textarea[placeholder], [role='textbox']"
-    SEND_SELECTOR = "button[class*='send'], button[data-testid='send-button']"
-    RESPONSE_SELECTOR = ".message-content, .assistant-message, [class*='response'], [class*='markdown']"
-    NEW_CHAT_SELECTOR = "a[href='/'], button[class*='new-chat'], [class*='create-conversation']"
-    SEARCH_INDICATOR = "[class*='searching'], [class*='search-indicator']"
+    INPUT_SELECTOR = "textarea, [role='textbox'], textarea[class*='chat'], textarea[class*='input']"
+    SEND_SELECTOR = "button[class*='send'], button[data-testid='send-button'], img[class*='send']"
+    RESPONSE_SELECTOR = "[class*='markdown'], [class*='message-content'], [class*='assistant']"
+    NEW_CHAT_SELECTOR = "a[href='/'], button[class*='new-chat'], [class*='create-conversation'], [data-testid='new-chat']"
+    SEARCH_INDICATOR = "[class*='searching'], [class*='search-indicator'], [class*='web-search']"
 
     async def _navigate_to_chat(self, page: Page):
         """导航到 Kimi 新对话页面"""
-        await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30000)
+        await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
         await asyncio.sleep(2)
 
     async def _type_question(self, page: Page, question: str):
         """在输入框中输入问题"""
         input_box = page.locator(self.INPUT_SELECTOR).first
-        await input_box.wait_for(state="visible", timeout=10)
+        await input_box.wait_for(state="visible", timeout=10000)
         await input_box.click()
         # 模拟人类输入速度
         await asyncio.sleep(0.3)
@@ -269,15 +270,15 @@ class KimiWebChatClient(WebChatClientBase):
         # 先等搜索指示器出现然后消失
         try:
             search_indicator = page.locator(self.SEARCH_INDICATOR).first
-            if await search_indicator.is_visible(timeout=5):
+            if await search_indicator.is_visible(timeout=10000):
                 # 等搜索完成
-                await search_indicator.wait_for(state="hidden", timeout=60)
+                await search_indicator.wait_for(state="hidden", timeout=60000)
                 logger.info(f"WebChat kimi: search completed")
         except Exception:
             # 可能没有搜索指示器，直接继续
             pass
 
-        # 等文本稳定
+        # 文本稳定
         await self._wait_for_text_stability(
             page, self.RESPONSE_SELECTOR, timeout=timeout
         )
@@ -291,7 +292,7 @@ class KimiWebChatClient(WebChatClientBase):
         # 等响应区域出现
         try:
             response_area = page.locator(self.RESPONSE_SELECTOR).last
-            await response_area.wait_for(state="visible", timeout=10)
+            await response_area.wait_for(state="visible", timeout=10000)
         except Exception:
             # 回退：获取最后一个消息元素
             response_area = page.locator("[class*='message']").last
@@ -302,7 +303,7 @@ class KimiWebChatClient(WebChatClientBase):
         # 提取所有 <a href> 链接，嵌入到文本中
         links = await page.evaluate("""
             () => {
-                const responseEl = document.querySelector('.message-content, .assistant-message, [class*="response"], [class*="markdown"]');
+                const responseEl = document.querySelector('[class*="markdown"], [class*="message-content"], [class*="assistant"]');
                 if (!responseEl) return [];
                 const links = responseEl.querySelectorAll('a[href]');
                 return Array.from(links).map(a => ({
@@ -312,7 +313,7 @@ class KimiWebChatClient(WebChatClientBase):
             }
         """)
 
-        # 将链接追加到文本末尾，形成类似 API 模式的引用格式
+        # 将链接追加到文本末尾
         if links:
             citation_lines = []
             for i, link in enumerate(links):
@@ -320,7 +321,7 @@ class KimiWebChatClient(WebChatClientBase):
                 # 过滤掉站内导航链接和 javascript:
                 if href.startswith("javascript:") or href.startswith("#"):
                     continue
-                if "moonshot.cn" in href and "/chat" in href:
+                if "kimi.com" in href and "/chat" in href:
                     continue
                 link_text = link["text"] or f"[{i+1}]"
                 citation_lines.append(f"[{i+1}] {link_text}: {href}")
@@ -339,10 +340,10 @@ class KimiWebChatClient(WebChatClientBase):
                 await asyncio.sleep(2)
             else:
                 # 回退：直接导航到首页
-                await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30000)
+                await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
                 await asyncio.sleep(2)
         except Exception:
-            await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30000)
+            await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
             await asyncio.sleep(2)
 
 

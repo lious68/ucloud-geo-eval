@@ -29,7 +29,7 @@ WEBCHAT_SITES = {
     },
     "kimi": {
         "name": "Kimi",
-        "url": "https://kimi.moonshot.cn",
+        "url": "https://www.kimi.com",
     },
     "qwen": {
         "name": "通义千问",

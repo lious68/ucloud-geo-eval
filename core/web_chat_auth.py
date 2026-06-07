@@ -116,6 +116,7 @@ def get_all_auth_status() -> Dict[str, Dict]:
             "name": site_info["name"],
             "url": site_info["url"],
             "has_auth": has_auth,
+            "is_valid": has_auth,  # 有认证文件即视为有效（需验证确认）
             "auth_path": get_auth_path(model_key) if has_auth else None,
         }
     return result

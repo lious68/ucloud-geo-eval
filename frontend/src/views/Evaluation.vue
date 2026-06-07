@@ -127,7 +127,7 @@ const displayModels = computed(() => {
     } else if (ws.has_auth && ws.is_valid) {
       webchat_status = 'ready'
     } else if (ws.has_auth) {
-      webchat_status = 'expired'
+      webchat_status = 'ready'  // 有认证文件即可使用，后续评测时再实际验证
     }
     return { ...m, webchat_status }
   })

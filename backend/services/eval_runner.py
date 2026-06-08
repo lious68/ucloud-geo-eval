@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
 from database import (
     create_run, update_run_status, save_analysis_result, save_geo_scores,
-    get_questions, get_setting, get_db
+    get_questions, get_setting, get_db, get_run
 )
 from model_clients import ModelClient
 from analyzer import ResponseAnalyzer
@@ -55,11 +55,23 @@ _active_tasks: Dict[str, asyncio.Task] = {}
 
 
 async def cancel_evaluation(run_id: str) -> bool:
-    """强制取消运行中的评测任务"""
+    """强制取消运行中的评测任务
+
+    如果 task 在内存中，调用 task.cancel()；
+    即使 task 不在内存中（如服务重启后），也更新数据库状态为 cancelled。
+    """
     task = _active_tasks.get(run_id)
-    if task is None:
+    if task is not None:
+        task.cancel()
+
+    # 无论 task 是否在内存，都更新数据库状态
+    run = await get_run(run_id)
+    if not run:
         return False
-    task.cancel()
+    if run["status"] not in ("running", "pending"):
+        return False
+
+    await update_run_status(run_id, "cancelled")
     return True
 
 

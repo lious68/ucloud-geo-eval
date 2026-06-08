@@ -75,6 +75,15 @@
           :status="evalStore.progressPercent >= 100 ? 'success' : ''" />
         <div style="margin-top:12px;font-size:16px">{{ evalStore.statusText }}</div>
         <el-tag v-if="evalStore.evalMode === 'webchat'" type="info" style="margin-top:8px">🌐 WebChat 模式</el-tag>
+        <div style="margin-top:16px">
+          <el-popconfirm title="确定要强制中断评测吗？已完成的题目结果会保留。" confirm-button-text="确定中断" cancel-button-text="取消" @confirm="evalStore.cancelEval()">
+            <template #reference>
+              <el-button type="danger" :disabled="evalStore.statusText === '评测已中断'">
+                <el-icon><CloseBold /></el-icon> 强制中断
+              </el-button>
+            </template>
+          </el-popconfirm>
+        </div>
       </div>
 
       <!-- 活跃状态心跳指示器 -->

@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Qu
 from typing import Optional
 import database as db
 import models
-from services.eval_runner import start_evaluation
+from services.eval_runner import start_evaluation, cancel_evaluation
 from database import verify_session
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
@@ -84,6 +84,15 @@ async def get_evaluation(run_id: str):
 async def delete_evaluation(run_id: str):
     """删除评测"""
     await db.delete_run(run_id)
+    return {"success": True}
+
+
+@router.post("/{run_id}/cancel")
+async def cancel_evaluation_endpoint(run_id: str):
+    """强制取消运行中的评测任务"""
+    ok = await cancel_evaluation(run_id)
+    if not ok:
+        raise HTTPException(404, f"评测任务 {run_id} 不存在或已结束")
     return {"success": True}
 
 

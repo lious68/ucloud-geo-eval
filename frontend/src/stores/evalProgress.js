@@ -97,6 +97,13 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
         stopHeartbeat()
         disconnectWS()
         if (onComplete) onComplete('failed')
+      } else if (data.type === 'cancelled') {
+        statusText.value = '评测已中断'
+        heartbeatActive.value = false
+        heartbeatStalled.value = false
+        stopHeartbeat()
+        disconnectWS()
+        if (onComplete) onComplete('cancelled')
       }
     }
 
@@ -185,6 +192,16 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
     }
   }
 
+  // ── 强制中断评测 ──
+  async function cancelEval() {
+    if (!runId.value) return
+    try {
+      await apiFetch(`/evaluations/${runId.value}/cancel`, { method: 'POST' })
+    } catch (e) {
+      ElMessage.error('中断评测失败: ' + e.message)
+    }
+  }
+
   // ── 检查评测状态（心跳 stalled 时手动调用） ──
   async function checkStatus() {
     if (!runId.value) return
@@ -200,6 +217,12 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
         disconnectWS()
       } else if (run.status === 'failed') {
         statusText.value = '评测失败'
+        heartbeatActive.value = false
+        heartbeatStalled.value = false
+        stopHeartbeat()
+        disconnectWS()
+      } else if (run.status === 'cancelled') {
+        statusText.value = '评测已中断'
         heartbeatActive.value = false
         heartbeatStalled.value = false
         stopHeartbeat()
@@ -241,6 +264,6 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
     running, runId, progress, statusText,
     heartbeatActive, heartbeatStalled, lastUpdateTime,
     logs, evalMode, progressPercent,
-    startEval, recoverRunningEval, checkStatus, reset,
+    startEval, recoverRunningEval, checkStatus, cancelEval, reset,
   }
 })

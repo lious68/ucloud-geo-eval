@@ -284,6 +284,11 @@ async def update_run_status(run_id: str, status: str, completed: int = None):
                 "UPDATE evaluation_runs SET status=? WHERE id=?",
                 (status, run_id)
             )
+        elif status == "cancelled":
+            await db.execute(
+                "UPDATE evaluation_runs SET status=?, completed_at=?, completed_questions=COALESCE(?,completed_questions) WHERE id=?",
+                (status, datetime.now().isoformat(), completed, run_id)
+            )
         else:
             await db.execute(
                 "UPDATE evaluation_runs SET status=?, completed_questions=COALESCE(?,completed_questions) WHERE id=?",

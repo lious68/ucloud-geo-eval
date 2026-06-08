@@ -29,6 +29,11 @@ UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.
 
 def _on_task_done(task: asyncio.Task):
     """后台评测任务完成回调：捕获异常并记录日志"""
+    # 从 _active_tasks 中移除
+    for run_id, t in list(_active_tasks.items()):
+        if t is task:
+            _active_tasks.pop(run_id, None)
+            break
     try:
         exc = task.exception()
         if exc:
@@ -47,6 +52,15 @@ def _is_natural_question(question: str, category: str = "") -> bool:
 
 # 全局任务管理
 _active_tasks: Dict[str, asyncio.Task] = {}
+
+
+async def cancel_evaluation(run_id: str) -> bool:
+    """强制取消运行中的评测任务"""
+    task = _active_tasks.get(run_id)
+    if task is None:
+        return False
+    task.cancel()
+    return True
 
 
 async def start_evaluation(
@@ -172,6 +186,9 @@ async def _run_evaluation(
                 wc_client = webchat_clients[mk]
                 for q in questions:
                     try:
+                        # 让出控制权，使 CancelledError 能被及时响应
+                        await asyncio.sleep(0)
+
                         response = await wc_client.chat(q["question"])
 
                         analysis = analyzer.analyze(
@@ -231,6 +248,9 @@ async def _run_evaluation(
 
                 for q in questions:
                     try:
+                        # 让出控制权，使 CancelledError 能被及时响应
+                        await asyncio.sleep(0)
+
                         # 发送请求
                         response = client.chat(q["question"])
 
@@ -303,6 +323,15 @@ async def _run_evaluation(
         if ws_manager:
             await ws_manager.broadcast(run_id, {
                 "type": "completed",
+                "run_id": run_id,
+            })
+
+    except asyncio.CancelledError:
+        logger.warning(f"[EVAL {run_id}] Evaluation was cancelled by user")
+        await update_run_status(run_id, "cancelled", completed)
+        if ws_manager:
+            await ws_manager.broadcast(run_id, {
+                "type": "cancelled",
                 "run_id": run_id,
             })
 

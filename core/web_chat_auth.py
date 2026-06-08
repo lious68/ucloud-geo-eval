@@ -1,39 +1,53 @@
 """
 UCloud GEO 评估框架 - WebChat 认证状态管理
 管理各 AI 模型官网的登录状态（Playwright storageState JSON 文件）
+支持对关键认证 cookie 的精确检测，区分各平台的登录验证状态。
 """
 import os
 import json
+import time
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 # 认证状态文件目录
 AUTH_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "webchat_auth")
 
-# 各模型对应的官网地址
+# 各模型对应的官网地址及关键认证 cookie 名称
+# auth_cookies: 该平台登录状态的关键 cookie 名称（匹配任意一个即视为有效）
+# auth_domains: cookie 所属域名的匹配模式（只要域名包含这些字符串即可）
 WEBCHAT_SITES = {
     "deepseek": {
         "name": "DeepSeek",
         "url": "https://chat.deepseek.com",
+        "auth_cookies": ["user_token", "token", "auth_token", "session_id", "ds_token"],
+        "auth_domains": ["deepseek.com"],
     },
     "ernie": {
         "name": "文心一言",
         "url": "https://yiyan.baidu.com",
+        "auth_cookies": ["BDUSS", "STOKEN", "BAIDUID", "BDTOKEN", "BIDUPSID"],
+        "auth_domains": ["baidu.com"],
     },
     "doubao": {
         "name": "豆包",
         "url": "https://www.doubao.com/chat",
+        "auth_cookies": ["sessionid", "sid_tt", "csrf_token", "passport_auth", "is_login"],
+        "auth_domains": ["doubao.com", "volces.com", "bytedance.com"],
     },
     "kimi": {
         "name": "Kimi",
         "url": "https://www.kimi.com",
+        "auth_cookies": ["token", "access_token", "user_id", "refresh_token", "kimi_token"],
+        "auth_domains": ["kimi.com", "moonshot.cn"],
     },
     "qwen": {
         "name": "千问",
         "url": "https://www.qianwen.com",
+        "auth_cookies": ["login_sid", "token", "access_token", "csrf_token", "aliyun_login"],
+        "auth_domains": ["qianwen.com", "aliyun.com", "tongyi"],
     },
 }
 
@@ -106,17 +120,78 @@ def delete_auth_state(model_key: str) -> bool:
     return False
 
 
+def validate_auth_cookies(model_key: str) -> Dict:
+    """验证认证状态中的关键 cookie 是否存在且未过期
+
+    检查 Playwright storageState 中是否包含该平台的关键认证 cookie，
+    并且 cookie 的域名匹配、未过期。匹配任意一个关键 cookie 即视为有效。
+
+    Returns:
+        {
+            "has_auth": bool,         # 是否有认证文件
+            "is_valid": bool,         # 认证是否有效（至少一个关键 cookie 匹配）
+            "matched_cookies": list,  # 匹配到的关键 cookie 名称列表
+            "cookie_count": int,      # 认证文件中的总 cookie 数量
+            "details": str,           # 可读的状态描述
+        }
+    """
+    state = load_auth_state(model_key)
+    if not state:
+        return {
+            "has_auth": False,
+            "is_valid": False,
+            "matched_cookies": [],
+            "cookie_count": 0,
+            "details": "未上传认证文件",
+        }
+
+    site = WEBCHAT_SITES.get(model_key, {})
+    required_cookies = site.get("auth_cookies", [])
+    auth_domains = site.get("auth_domains", [])
+
+    cookies = state.get("cookies", [])
+    matched: List[str] = []
+    for cookie in cookies:
+        name = cookie.get("name", "")
+        domain = cookie.get("domain", "")
+        # 检查是否是关键认证 cookie 且域名匹配
+        if name in required_cookies:
+            domain_match = any(d in domain for d in auth_domains) if auth_domains else True
+            if domain_match:
+                # 检查是否过期（-1 表示 session cookie，不过期）
+                expires = cookie.get("expires", -1)
+                if expires == -1 or expires > time.time():
+                    matched.append(name)
+
+    is_valid = len(matched) > 0
+    if is_valid:
+        details = f"认证有效（关键 cookie: {', '.join(matched)}）"
+    else:
+        details = f"认证无效（共 {len(cookies)} 个 cookie，无关键认证 cookie 匹配）"
+
+    return {
+        "has_auth": True,
+        "is_valid": is_valid,
+        "matched_cookies": matched,
+        "cookie_count": len(cookies),
+        "details": details,
+    }
+
+
 def get_all_auth_status() -> Dict[str, Dict]:
-    """获取所有模型的认证状态概览"""
+    """获取所有模型的认证状态概览（包含精确验证）"""
     result = {}
     for model_key, site_info in WEBCHAT_SITES.items():
-        has_auth = has_auth_state(model_key)
+        validation = validate_auth_cookies(model_key)
         result[model_key] = {
             "model_key": model_key,
             "name": site_info["name"],
             "url": site_info["url"],
-            "has_auth": has_auth,
-            "is_valid": has_auth,  # 有认证文件即视为有效（需验证确认）
-            "auth_path": get_auth_path(model_key) if has_auth else None,
+            "has_auth": validation["has_auth"],
+            "is_valid": validation["is_valid"],
+            "matched_cookies": validation["matched_cookies"],
+            "cookie_count": validation["cookie_count"],
+            "details": validation["details"],
+            "auth_path": get_auth_path(model_key) if validation["has_auth"] else None,
         }
     return result

@@ -22,14 +22,14 @@ WEBCHAT_SITES = {
     "deepseek": {
         "name": "DeepSeek",
         "url": "https://chat.deepseek.com",
-        "auth_cookies": ["user_token", "token", "auth_token", "ds_token", "chat_token", "session_id"],
+        "auth_cookies": ["ds_session_id", "user_token", "token", "auth_token", "chat_token", "HWWAFSESID"],
         "auth_domains": ["deepseek.com"],
     },
     "ernie": {
         "name": "文心一言",
         "url": "https://yiyan.baidu.com",
-        "auth_cookies": ["BDUSS", "STOKEN", "BAIDUID", "BDTOKEN", "BIDUPSID", "BDUSS_BFESS"],
-        "auth_domains": ["baidu.com"],
+        "auth_cookies": ["BDUSS", "STOKEN", "BAIDUID", "BDTOKEN", "BIDUPSID", "BAIDUID_BFESS", "BDUSS_BFESS", "XFT", "__bid_n"],
+        "auth_domains": ["baidu.com", "yiyan.baidu.com", "xlab.baidu.com"],
     },
     "doubao": {
         "name": "豆包",

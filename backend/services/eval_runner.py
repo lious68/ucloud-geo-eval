@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
 
 
+def _on_task_done(task: asyncio.Task):
+    """后台评测任务完成回调：捕获异常并记录日志"""
+    try:
+        exc = task.exception()
+        if exc:
+            logger.error(f"Eval background task failed with exception: {exc}", exc_info=exc)
+    except asyncio.CancelledError:
+        logger.warning("Eval background task was cancelled")
+    except Exception as e:
+        logger.error(f"Error retrieving task exception: {e}")
+
+
 def _is_natural_question(question: str, category: str = "") -> bool:
     """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
     if category == "引导型":
@@ -106,6 +118,7 @@ async def start_evaluation(
         _run_evaluation(run_id, available_models if mode == "api" else model_keys,
                         q_list, temperature, delay, ws_manager, mode)
     )
+    task.add_done_callback(_on_task_done)
     _active_tasks[run_id] = task
 
     return run_id
@@ -121,6 +134,7 @@ async def _run_evaluation(
     mode: str = "api",
 ):
     """执行评测的核心逻辑"""
+    logger.info(f"[EVAL {run_id}] Starting evaluation: mode={mode}, models={model_keys}, questions={len(questions)}")
     await update_run_status(run_id, "running")
     analyzer = ResponseAnalyzer()
     calculator = MetricsCalculator()
@@ -128,19 +142,24 @@ async def _run_evaluation(
     # WebChat 模式的浏览器客户端管理
     webchat_clients: Dict[str, Any] = {}
     if mode == "webchat":
+        logger.info(f"[EVAL {run_id}] WebChat mode: initializing browser clients for {model_keys}")
         from web_chat_clients import create_web_chat_client
         for mk in model_keys:
+            logger.info(f"[EVAL {run_id}] WebChat {mk}: creating client...")
             client = create_web_chat_client(mk)
             if not client.is_configured:
-                logger.warning(f"WebChat {mk}: 无认证状态，跳过")
+                logger.warning(f"[EVAL {run_id}] WebChat {mk}: 无认证状态，跳过")
                 continue
+            logger.info(f"[EVAL {run_id}] WebChat {mk}: launching browser...")
             initialized = await client.initialize()
             if not initialized:
-                logger.warning(f"WebChat {mk}: 浏览器启动失败，跳过")
+                logger.warning(f"[EVAL {run_id}] WebChat {mk}: 浏览器启动失败，跳过")
                 continue
+            logger.info(f"[EVAL {run_id}] WebChat {mk}: browser ready")
             webchat_clients[mk] = client
 
     total = len(questions) * len(model_keys)
+    logger.info(f"[EVAL {run_id}] Total tasks: {total} ({len(questions)} questions × {len(model_keys)} models)")
     completed = 0
 
     # 按模型分组的结果
@@ -288,7 +307,7 @@ async def _run_evaluation(
             })
 
     except Exception as e:
-        logger.error(f"Evaluation failed: {e}")
+        logger.error(f"[EVAL {run_id}] Evaluation failed: {e}", exc_info=True)
         await update_run_status(run_id, "failed")
         if ws_manager:
             await ws_manager.broadcast(run_id, {

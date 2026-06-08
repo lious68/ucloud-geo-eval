@@ -351,67 +351,549 @@ class KimiWebChatClient(WebChatClientBase):
 
 
 class DeepSeekWebChatClient(WebChatClientBase):
-    """DeepSeek WebChat 客户端（暂未实现，需调试选择器）"""
+    """DeepSeek (chat.deepseek.com) WebChat 客户端
+
+    DeepSeek 不内置联网搜索，纯推理模型。
+    页面为 React SPA，需要登录后才能看到聊天界面。
+    选择器基于 DeepSeek 2025 年页面结构，使用多重 fallback。
+    """
+
+    # ── DeepSeek 页面选择器 ──
+    INPUT_SELECTOR = (
+        "textarea[data-testid='chat-input'], "
+        "textarea[id*='chat'], textarea[class*='input'], textarea[class*='chat-input'], "
+        "[contenteditable='true'][class*='input'], "
+        "#chat-input, .chat-input textarea"
+    )
+    SEND_SELECTOR = (
+        "button[data-testid='send-button'], "
+        "button[aria-label*='Send'], button[aria-label*='send'], "
+        "button[class*='send'], img[class*='send'], "
+        "button[type='submit'][class*='chat']"
+    )
+    RESPONSE_SELECTOR = (
+        "[data-testid='assistant-message'], "
+        "[class*='assistant-message'], [class*='message-assistant'], "
+        "[class*='markdown-body'], [class*='markdown'], "
+        ".chat-message-assistant, .message-content"
+    )
+    NEW_CHAT_SELECTOR = (
+        "a[href='/'][class*='sidebar'], "
+        "button[aria-label*='new chat'], button[aria-label*='New Chat'], "
+        "a[href='/chat'], "
+        "[class*='new-chat'], [class*='new-conversation'], "
+        "[data-testid='new-chat']"
+    )
+
     async def _navigate_to_chat(self, page: Page):
-        raise NotImplementedError("DeepSeek WebChat 尚未适配，请使用 API 模式")
+        """导航到 DeepSeek 新对话页面"""
+        await page.goto("https://chat.deepseek.com", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
+
     async def _type_question(self, page: Page, question: str):
-        raise NotImplementedError
+        """在输入框中输入问题"""
+        input_el = page.locator(self.INPUT_SELECTOR).first
+        await input_el.wait_for(state="visible", timeout=10000)
+        await input_el.click()
+        await asyncio.sleep(0.3)
+
+        # 区分 textarea 和 contenteditable
+        tag = await input_el.evaluate("el => el.tagName")
+        if tag == "TEXTAREA":
+            await input_el.fill(question)
+        else:
+            await page.keyboard.type(question, delay=30)
+
     async def _send_question(self, page: Page):
-        raise NotImplementedError
+        """发送问题"""
+        try:
+            send_btn = page.locator(self.SEND_SELECTOR).first
+            if await send_btn.is_visible(timeout=5000):
+                await send_btn.click()
+            else:
+                await page.keyboard.press("Enter")
+        except Exception:
+            await page.keyboard.press("Enter")
+
     async def _wait_for_response(self, page: Page, timeout: int = 120):
-        raise NotImplementedError
+        """等待 DeepSeek 响应完成
+
+        DeepSeek 无联网搜索，直接等待文本稳定。
+        流式输出完成后文本长度不再变化。
+        """
+        # 等响应区域出现
+        try:
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
+            await resp_area.wait_for(state="visible", timeout=30000)
+        except Exception:
+            # 回退：等页面内容变化
+            await asyncio.sleep(10)
+
+        # 等文本稳定
+        await self._wait_for_text_stability(
+            page, self.RESPONSE_SELECTOR, timeout=timeout
+        )
+
     async def _extract_response(self, page: Page) -> str:
-        raise NotImplementedError
+        """提取 DeepSeek 响应文本，包括引用链接"""
+        try:
+            response_area = page.locator(self.RESPONSE_SELECTOR).last
+            await response_area.wait_for(state="visible", timeout=10000)
+        except Exception:
+            try:
+                response_area = page.locator("[class*='markdown']").last
+                await response_area.wait_for(state="visible", timeout=10000)
+            except Exception:
+                return ""
+
+        text = await response_area.inner_text()
+
+        # 提取所有 <a href> 链接
+        links = await response_area.evaluate("""
+            el => {
+                const links = el.querySelectorAll('a[href]');
+                return Array.from(links).map(a => ({
+                    text: a.textContent.trim(),
+                    href: a.href
+                }));
+            }
+        """)
+
+        if links:
+            citation_lines = []
+            for i, link in enumerate(links):
+                href = link["href"]
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                link_text = link["text"] or f"[{i+1}]"
+                citation_lines.append(f"[{i+1}] {link_text}: {href}")
+            if citation_lines:
+                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
+        return text
+
     async def _start_new_chat(self, page: Page):
-        raise NotImplementedError
+        """开始新对话"""
+        try:
+            new_btn = page.locator(self.NEW_CHAT_SELECTOR).first
+            if await new_btn.is_visible(timeout=3):
+                await new_btn.click()
+                await asyncio.sleep(2)
+            else:
+                await page.goto("https://chat.deepseek.com", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)
+        except Exception:
+            await page.goto("https://chat.deepseek.com", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
 
 
 class ErnieWebChatClient(WebChatClientBase):
-    """文心一言 WebChat 客户端（暂未实现）"""
+    """文心一言 (yiyan.baidu.com) WebChat 客户端
+
+    百度的 AI 聊天平台，支持联网搜索。
+    Baidu 使用哈希化的 CSS 类名（如 editable__T7WAW4uW），
+    因此选择器以结构/语义属性为主，辅以类名模式匹配。
+    """
+
+    # ── 文心一言选择器 ──
+    INPUT_SELECTOR = (
+        "[contenteditable='true'], "
+        "[class*='editable'], "
+        "[class*='input-area'], textarea"
+    )
+    SEND_SELECTOR = (
+        "button[aria-label*='发送'], button[aria-label*='Send'], "
+        "button[class*='send'], button[class*='submit'], "
+        "button[class*='ebButton--primary']"
+    )
+    RESPONSE_SELECTOR = (
+        "[class*='message-content'], "
+        "[class*='response'], "
+        "[class*='markdown'], "
+        "[class*='assistant'], "
+        "[role='article']"
+    )
+    NEW_CHAT_SELECTOR = (
+        "button[aria-label*='新建'], "
+        "a[href*='new'], "
+        "[class*='new-chat'], [class*='create'], "
+        "button[class*='new']"
+    )
+    SEARCH_TOGGLE_SELECTOR = (
+        "button[aria-label*='搜索'], "
+        "[class*='search-toggle'], "
+        "[class*='联网']"
+    )
+
     async def _navigate_to_chat(self, page: Page):
-        raise NotImplementedError("文心一言 WebChat 尚未适配，请使用 API 模式")
+        """导航到文心一言"""
+        await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
+
     async def _type_question(self, page: Page, question: str):
-        raise NotImplementedError
+        """在输入框中输入问题"""
+        input_el = page.locator(self.INPUT_SELECTOR).first
+        await input_el.wait_for(state="visible", timeout=10000)
+        await input_el.click()
+        await asyncio.sleep(0.3)
+        await page.keyboard.type(question, delay=30)
+
     async def _send_question(self, page: Page):
-        raise NotImplementedError
+        """发送问题"""
+        try:
+            send_btn = page.locator(self.SEND_SELECTOR).first
+            if await send_btn.is_visible(timeout=5000):
+                await send_btn.click()
+            else:
+                await page.keyboard.press("Enter")
+        except Exception:
+            await page.keyboard.press("Enter")
+
     async def _wait_for_response(self, page: Page, timeout: int = 120):
-        raise NotImplementedError
+        """等待文心一言响应完成
+
+        文心一言可能联网搜索，先检测搜索指示器，
+        然后等文本稳定。
+        """
+        # 尝试检测搜索指示器
+        try:
+            search_el = page.locator("[class*='searching'], [class*='loading']").first
+            if await search_el.is_visible(timeout=5000):
+                await search_el.wait_for(state="hidden", timeout=60000)
+                logger.info(f"WebChat ernie: search completed")
+        except Exception:
+            pass
+
+        # 等响应区域出现 + 文本稳定
+        try:
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
+            await resp_area.wait_for(state="visible", timeout=30000)
+        except Exception:
+            await asyncio.sleep(10)
+
+        await self._wait_for_text_stability(
+            page, self.RESPONSE_SELECTOR, timeout=timeout
+        )
+
     async def _extract_response(self, page: Page) -> str:
-        raise NotImplementedError
+        """提取文心一言响应文本"""
+        try:
+            response_area = page.locator(self.RESPONSE_SELECTOR).last
+            await response_area.wait_for(state="visible", timeout=10000)
+        except Exception:
+            return ""
+
+        text = await response_area.inner_text()
+
+        # 提取链接
+        links = await response_area.evaluate("""
+            el => {
+                const links = el.querySelectorAll('a[href]');
+                return Array.from(links).map(a => ({
+                    text: a.textContent.trim(),
+                    href: a.href
+                }));
+            }
+        """)
+
+        if links:
+            citation_lines = []
+            for i, link in enumerate(links):
+                href = link["href"]
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                if "baidu.com" in href and "/chat" in href:
+                    continue
+                link_text = link["text"] or f"[{i+1}]"
+                citation_lines.append(f"[{i+1}] {link_text}: {href}")
+            if citation_lines:
+                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
+        return text
+
     async def _start_new_chat(self, page: Page):
-        raise NotImplementedError
+        """开始新对话"""
+        try:
+            new_btn = page.locator(self.NEW_CHAT_SELECTOR).first
+            if await new_btn.is_visible(timeout=3):
+                await new_btn.click()
+                await asyncio.sleep(2)
+            else:
+                await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)
+        except Exception:
+            await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
 
 
 class DoubaoWebChatClient(WebChatClientBase):
-    """豆包 WebChat 客户端（暂未实现）"""
+    """豆包 (doubao.com/chat) WebChat 客户端
+
+    字节跳动旗下 AI 聊天平台，强联网搜索集成。
+    使用 Semi Design UI 框架（class 前缀 semi-* / samantha-*）。
+    页面在未登录状态下也能看到聊天 UI 结构。
+    """
+
+    # ── 豆包选择器 ──
+    INPUT_SELECTOR = (
+        "textarea[class*='chat-input'], textarea[class*='input'], textarea[class*='samantha'], "
+        "[contenteditable='true'], "
+        "[data-testid='chat-input'], textarea"
+    )
+    SEND_SELECTOR = (
+        "button[aria-label*='发送'], button[aria-label*='Send'], "
+        "button[class*='send'], button[class*='semi-button-primary'], "
+        "[data-testid='send-button']"
+    )
+    RESPONSE_SELECTOR = (
+        "[class*='message-content'], [class*='markdown'], "
+        "[class*='response'], [class*='assistant'], "
+        "[role='article'], [class*='chat-message']"
+    )
+    NEW_CHAT_SELECTOR = (
+        "button[class*='new-chat'], "
+        "button[aria-label*='新建对话'], "
+        "[class*='samantha'][class*='new'], "
+        "a[class*='sidebar'][href*='chat']"
+    )
+    SEARCH_INDICATOR = (
+        "[class*='searching'], [class*='searching'], "
+        "[class*='联网'], [class*='search-result']"
+    )
+
     async def _navigate_to_chat(self, page: Page):
-        raise NotImplementedError("豆包 WebChat 尚未适配，请使用 API 模式")
+        """导航到豆包聊天页面"""
+        await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(5)
+
     async def _type_question(self, page: Page, question: str):
-        raise NotImplementedError
+        """在输入框中输入问题"""
+        input_el = page.locator(self.INPUT_SELECTOR).first
+        await input_el.wait_for(state="visible", timeout=10000)
+        await input_el.click()
+        await asyncio.sleep(0.3)
+
+        tag = await input_el.evaluate("el => el.tagName")
+        if tag == "TEXTAREA":
+            await input_el.fill(question)
+        else:
+            await page.keyboard.type(question, delay=30)
+
     async def _send_question(self, page: Page):
-        raise NotImplementedError
+        """发送问题"""
+        try:
+            send_btn = page.locator(self.SEND_SELECTOR).first
+            if await send_btn.is_visible(timeout=5000):
+                await send_btn.click()
+            else:
+                await page.keyboard.press("Enter")
+        except Exception:
+            await page.keyboard.press("Enter")
+
     async def _wait_for_response(self, page: Page, timeout: int = 120):
-        raise NotImplementedError
+        """等待豆包响应完成
+
+        豆包会联网搜索，先等搜索指示器消失，再等文本稳定。
+        """
+        try:
+            search_indicator = page.locator(self.SEARCH_INDICATOR).first
+            if await search_indicator.is_visible(timeout=10000):
+                await search_indicator.wait_for(state="hidden", timeout=60000)
+                logger.info(f"WebChat doubao: search completed")
+        except Exception:
+            pass
+
+        try:
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
+            await resp_area.wait_for(state="visible", timeout=30000)
+        except Exception:
+            await asyncio.sleep(10)
+
+        await self._wait_for_text_stability(
+            page, self.RESPONSE_SELECTOR, timeout=timeout
+        )
+
     async def _extract_response(self, page: Page) -> str:
-        raise NotImplementedError
+        """提取豆包响应文本"""
+        try:
+            response_area = page.locator(self.RESPONSE_SELECTOR).last
+            await response_area.wait_for(state="visible", timeout=10000)
+        except Exception:
+            return ""
+
+        text = await response_area.inner_text()
+
+        links = await response_area.evaluate("""
+            el => {
+                const links = el.querySelectorAll('a[href]');
+                return Array.from(links).map(a => ({
+                    text: a.textContent.trim(),
+                    href: a.href
+                }));
+            }
+        """)
+
+        if links:
+            citation_lines = []
+            for i, link in enumerate(links):
+                href = link["href"]
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                if "doubao.com" in href and "/chat" in href:
+                    continue
+                link_text = link["text"] or f"[{i+1}]"
+                citation_lines.append(f"[{i+1}] {link_text}: {href}")
+            if citation_lines:
+                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
+        return text
+
     async def _start_new_chat(self, page: Page):
-        raise NotImplementedError
+        """开始新对话"""
+        try:
+            new_btn = page.locator(self.NEW_CHAT_SELECTOR).first
+            if await new_btn.is_visible(timeout=3):
+                await new_btn.click()
+                await asyncio.sleep(2)
+            else:
+                await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(5)
+        except Exception:
+            await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(5)
 
 
 class QwenWebChatClient(WebChatClientBase):
-    """通义千问 WebChat 客户端（暂未实现）"""
+    """千问 (www.qianwen.com) WebChat 客户端
+
+    阿里巴巴旗下 AI 聊天平台，支持思考/研究模式联网搜索。
+    注意：tongyi.aliyun.com 已废弃，新网址是 www.qianwen.com。
+    页面 UI 清晰，contenteditable 输入框，有"新建对话"按钮。
+    """
+
+    # ── 千问选择器 ──
+    INPUT_SELECTOR = (
+        "[contenteditable='true'], "
+        "textarea[class*='chat-input'], textarea[class*='input'], "
+        "[data-testid='chat-input']"
+    )
+    SEND_SELECTOR = (
+        "button[aria-label*='发送'], button[aria-label*='Send'], "
+        "button[aria-label*='send'], button[class*='send'], "
+        "[data-testid='send-button']"
+    )
+    RESPONSE_SELECTOR = (
+        "[class*='message-content'], [class*='markdown'], "
+        "[class*='assistant'], [class*='response'], "
+        "[role='article']"
+    )
+    NEW_CHAT_SELECTOR = (
+        "button[aria-label*='新建'], "
+        "button[class*='new-chat'], "
+        "a[href='/'][class*='sidebar'], "
+        "[data-testid='new-chat']"
+    )
+    SEARCH_INDICATOR = (
+        "[class*='searching'], [class*='search-indicator'], "
+        "[class*='联网'], [class*='research']"
+    )
+
     async def _navigate_to_chat(self, page: Page):
-        raise NotImplementedError("通义千问 WebChat 尚未适配，请使用 API 模式")
+        """导航到千问聊天页面"""
+        await page.goto("https://www.qianwen.com", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
+
     async def _type_question(self, page: Page, question: str):
-        raise NotImplementedError
+        """在输入框中输入问题"""
+        input_el = page.locator(self.INPUT_SELECTOR).first
+        await input_el.wait_for(state="visible", timeout=10000)
+        await input_el.click()
+        await asyncio.sleep(0.3)
+        await page.keyboard.type(question, delay=30)
+
     async def _send_question(self, page: Page):
-        raise NotImplementedError
+        """发送问题"""
+        try:
+            send_btn = page.locator(self.SEND_SELECTOR).first
+            if await send_btn.is_visible(timeout=5000):
+                await send_btn.click()
+            else:
+                await page.keyboard.press("Enter")
+        except Exception:
+            await page.keyboard.press("Enter")
+
     async def _wait_for_response(self, page: Page, timeout: int = 120):
-        raise NotImplementedError
+        """等待千问响应完成
+
+        千问有思考/研究模式，会联网搜索。
+        先检测搜索指示器，再等文本稳定。
+        """
+        try:
+            search_indicator = page.locator(self.SEARCH_INDICATOR).first
+            if await search_indicator.is_visible(timeout=10000):
+                await search_indicator.wait_for(state="hidden", timeout=60000)
+                logger.info(f"WebChat qwen: search completed")
+        except Exception:
+            pass
+
+        try:
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
+            await resp_area.wait_for(state="visible", timeout=30000)
+        except Exception:
+            await asyncio.sleep(10)
+
+        await self._wait_for_text_stability(
+            page, self.RESPONSE_SELECTOR, timeout=timeout
+        )
+
     async def _extract_response(self, page: Page) -> str:
-        raise NotImplementedError
+        """提取千问响应文本"""
+        try:
+            response_area = page.locator(self.RESPONSE_SELECTOR).last
+            await response_area.wait_for(state="visible", timeout=10000)
+        except Exception:
+            return ""
+
+        text = await response_area.inner_text()
+
+        links = await response_area.evaluate("""
+            el => {
+                const links = el.querySelectorAll('a[href]');
+                return Array.from(links).map(a => ({
+                    text: a.textContent.trim(),
+                    href: a.href
+                }));
+            }
+        """)
+
+        if links:
+            citation_lines = []
+            for i, link in enumerate(links):
+                href = link["href"]
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                if "qianwen.com" in href and "/chat" in href:
+                    continue
+                link_text = link["text"] or f"[{i+1}]"
+                citation_lines.append(f"[{i+1}] {link_text}: {href}")
+            if citation_lines:
+                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
+        return text
+
     async def _start_new_chat(self, page: Page):
-        raise NotImplementedError
+        """开始新对话"""
+        try:
+            new_btn = page.locator(self.NEW_CHAT_SELECTOR).first
+            if await new_btn.is_visible(timeout=3):
+                await new_btn.click()
+                await asyncio.sleep(2)
+            else:
+                await page.goto("https://www.qianwen.com", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)
+        except Exception:
+            await page.goto("https://www.qianwen.com", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
 
 
 # ── 客户端工厂 ──

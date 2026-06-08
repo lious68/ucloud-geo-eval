@@ -34,6 +34,7 @@ PUBLIC_PATHS = [
     "/api/questions/categories",
     "/api/questions/types",
     "/api/webchat/auth/status",
+    "/api/evaluations/ws/",     # WebSocket 连接：token 通过 query param 或初始消息验证
     "/docs",
     "/openapi.json",
     "/redoc",

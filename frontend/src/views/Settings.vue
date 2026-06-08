@@ -135,7 +135,7 @@ async function loadWebchatStatus() {
     const res = await apiFetch('/webchat/auth/status')
     webchatRawStatus.value = res.data || {}
     // 构建显示列表
-    const supported = ['kimi', 'deepseek']
+    const supported = ['kimi', 'deepseek', 'ernie', 'doubao', 'qwen']
     webchatModels.value = Object.entries(webchatRawStatus.value).map(([key, info]) => ({
       model_key: key,
       name: info.name,

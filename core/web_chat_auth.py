@@ -32,8 +32,8 @@ WEBCHAT_SITES = {
         "url": "https://www.kimi.com",
     },
     "qwen": {
-        "name": "通义千问",
-        "url": "https://tongyi.aliyun.com/tongyi/tongyi-hybrid",
+        "name": "千问",
+        "url": "https://www.qianwen.com",
     },
 }
 

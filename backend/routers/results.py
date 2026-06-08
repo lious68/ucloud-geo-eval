@@ -379,9 +379,10 @@ async def get_question_drilldown(run_id: str, model_key: str):
         recommend_num = 1 if r.get("ucloud_recommended") and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
 
-        # 回答摘要
+        # 回答摘要（表格列用）和完整回答内容（展开区用）
         raw = r.get("raw_content", "") or ""
         summary = raw[:200] + ("..." if len(raw) > 200 else "") if raw else ""
+        response_content = raw  # 完整内容，供前端折叠展示
 
         questions.append({
             "question_id": qid,
@@ -403,6 +404,7 @@ async def get_question_drilldown(run_id: str, model_key: str):
             "position_weight": r.get("position_weight", 0),
             "ucloud_rank": r.get("ucloud_rank"),
             "response_summary": summary,
+            "response_content": response_content,
             "has_error": has_error,
             "error_message": r.get("error_message") if has_error else None,
         })

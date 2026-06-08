@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getToken } from '../composables/useWebSocket'
+import { getToken, removeToken } from '../composables/useWebSocket'
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
@@ -17,33 +17,30 @@ const router = createRouter({
   routes,
 })
 
-// 路由守卫：未登录跳转登录页
-const PROTECTED_ROUTES = ['/evaluation', '/questions', '/settings']
-
+// 路由守卫：未登录跳转登录页（所有非 public 路由都需要登录）
 router.beforeEach(async (to, from, next) => {
   if (to.meta.public || to.path === '/login') {
     return next()
   }
 
-  // 检查登录状态
+  // 无 token → 直接跳登录页
   const token = getToken()
-  if (!token && PROTECTED_ROUTES.some(r => to.path.startsWith(r))) {
+  if (!token) {
     return next('/login')
   }
 
   // 验证 token 有效性
-  if (token) {
-    try {
-      const res = await fetch('/api/auth/check', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      const data = await res.json()
-      if (!data.data?.authenticated) {
-        return next('/login')
-      }
-    } catch (e) {
-      // 网络错误不拦截
+  try {
+    const res = await fetch('/api/auth/check', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const data = await res.json()
+    if (!data.data?.authenticated) {
+      removeToken()
+      return next('/login')
     }
+  } catch (e) {
+    // 网络错误不拦截，让页面正常加载
   }
 
   next()

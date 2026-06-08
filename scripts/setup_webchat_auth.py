@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
 from web_chat_auth import WEBCHAT_SITES, save_auth_state, ensure_auth_dir, AUTH_DIR
 
-SUPPORTED_MODELS = ["kimi"]  # 当前只支持 Kimi 的 WebChat
+SUPPORTED_MODELS = ["kimi", "deepseek", "ernie", "doubao", "qwen"]
 
 
 async def setup_auth(model_key: str):
@@ -27,10 +27,6 @@ async def setup_auth(model_key: str):
     site = WEBCHAT_SITES.get(model_key)
     if not site:
         print(f"❌ 未知模型: {model_key}")
-        return False
-
-    if model_key not in SUPPORTED_MODELS:
-        print(f"⚠️  {site['name']} 的 WebChat 尚未适配，暂不支持")
         return False
 
     print(f"\n{'='*50}")
@@ -48,7 +44,7 @@ async def setup_auth(model_key: str):
     page = await context.new_page()
 
     # 导航到登录页面
-    await page.goto(site["url"], wait_until="networkidle")
+    await page.goto(site["url"], wait_until="domcontentloaded")
     print(f"  ✅ 浏览器已打开 {site['url']}")
     print(f"  请在浏览器中完成登录操作...")
 

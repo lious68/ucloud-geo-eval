@@ -48,8 +48,6 @@ onMounted(async () => {
     const res = await fetch('/api/auth/check')
     const data = await res.json()
     isFirstLogin.value = !data.data?.has_password
-    // 已登录直接跳转
-    if (data.data?.authenticated) router.push('/dashboard')
   } catch (e) { /* ignore */ }
 })
 

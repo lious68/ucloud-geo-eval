@@ -296,8 +296,21 @@
                 <div class="expand-content">
                   <div class="expand-label">题目：</div>
                   <div class="expand-text">{{ row.question_text }}</div>
-                  <div class="expand-label" style="margin-top:8px">AI 完整回答：</div>
-                  <div class="expand-text full-answer" v-if="row.response_content || row.response_summary">{{ row.response_content || row.response_summary }}</div>
+                  <div class="expand-label" style="margin-top:8px">AI 回答：</div>
+                  <template v-if="row.response_content || row.response_summary">
+                    <!-- 短内容直接显示 -->
+                    <div v-if="isShortContent(row)" class="expand-text full-answer">{{ row.response_content || row.response_summary }}</div>
+                    <!-- 长内容折叠展示 -->
+                    <div v-else class="answer-collapse-wrapper">
+                      <div class="answer-preview" @click="toggleAnswerExpand(row.question_id)">
+                        {{ getPreviewText(row) }}
+                        <span class="answer-toggle-btn">{{ expandedAnswers[row.question_id] ? '收起 ▲' : '展开查看完整回答 ▼' }}</span>
+                      </div>
+                      <div v-if="expandedAnswers[row.question_id]" class="answer-full-content">
+                        {{ row.response_content || row.response_summary }}
+                      </div>
+                    </div>
+                  </template>
                   <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
                   <div v-if="row.error_message" class="expand-error">⚠️ 错误: {{ row.error_message }}</div>
                 </div>
@@ -415,6 +428,7 @@ const drilldownModelName = ref('')
 const drilldownLoading = ref(false)
 const filterMetric = ref('all')
 const filterCondition = ref('all')
+const expandedAnswers = ref({})
 
 const filterMetricLabel = computed(() => {
   const map = { coverage: '提及率', citation: '引用率', recommendation: 'TOP3 推荐率', sentiment: '情感值' }
@@ -447,6 +461,21 @@ function sentimentClass(sentiment) {
   if (sentiment.label === 'positive') return 'val-hit'
   if (sentiment.label === 'negative') return 'val-miss'
   return 'val-neutral'
+}
+
+function isShortContent(row) {
+  const content = row.response_content || row.response_summary || ''
+  return content.length <= 150
+}
+
+function getPreviewText(row) {
+  const content = row.response_content || row.response_summary || ''
+  if (expandedAnswers.value[row.question_id]) return ''
+  return content.slice(0, 150)
+}
+
+function toggleAnswerExpand(questionId) {
+  expandedAnswers.value[questionId] = !expandedAnswers.value[questionId]
 }
 
 async function openDrilldown(modelKey) {
@@ -769,5 +798,22 @@ onMounted(loadData)
 .expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }
 .expand-text { font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap; }
 .full-answer { max-height: none; overflow: visible; }
+.answer-collapse-wrapper { margin-top: 4px; }
+.answer-preview {
+  font-size: 13px; color: #333; line-height: 1.6; cursor: pointer;
+  background: #f0f5ff; padding: 8px 12px; border-radius: 6px;
+  border: 1px solid #e0e7ff; transition: background 0.2s;
+}
+.answer-preview:hover { background: #e0eaff; }
+.answer-toggle-btn {
+  color: #409eff; font-weight: 600; font-size: 13px; cursor: pointer;
+  display: inline-block; margin-left: 4px;
+}
+.answer-full-content {
+  font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap;
+  background: #fafafa; padding: 12px; border-radius: 6px;
+  border: 1px solid #ebeef5; margin-top: 6px;
+  max-height: 500px; overflow-y: auto;
+}
 .expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; }
 </style>

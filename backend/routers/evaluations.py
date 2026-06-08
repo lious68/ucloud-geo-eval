@@ -1,9 +1,10 @@
 """评测管理路由"""
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
 import database as db
 import models
 from services.eval_runner import start_evaluation
+from database import verify_session
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
 
@@ -87,8 +88,18 @@ async def delete_evaluation(run_id: str):
 
 
 @router.websocket("/ws/{run_id}")
-async def evaluation_ws(ws: WebSocket, run_id: str):
-    """WebSocket 实时进度"""
+async def evaluation_ws(ws: WebSocket, run_id: str, token: str = None):
+    """WebSocket 实时进度
+
+    鉴权方式：浏览器 WebSocket 无法设置自定义 header，
+    因此 token 通过 query param ?token=xxx 传递。
+    如果 token 无效则关闭连接。
+    """
+    # 验证 token（WebSocket 不走中间件，需手动鉴权）
+    if not token or not await verify_session(token):
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+
     await ws_manager.connect(run_id, ws)
     try:
         while True:

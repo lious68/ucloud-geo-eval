@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import router from '../router'
 
 const API_BASE = '/api'
 
@@ -40,14 +41,17 @@ export function useWebSocket() {
 
 export async function apiFetch(path, options = {}) {
   const token = getToken()
-  const headers = { 'Content-Type': 'application/json', ...options.headers }
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  // FormData 上传时不能设置 Content-Type，让浏览器自动设 multipart
+  const isFormData = options.body instanceof FormData
+  const headers = isFormData
+    ? { ...(options.headers || {}), ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+    : { 'Content-Type': 'application/json', ...options.headers, ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
 
   if (res.status === 401) {
     removeToken()
-    window.location.href = '/login'
+    router.push('/login')
     throw new Error('登录已过期')
   }
 

@@ -22,31 +22,31 @@ WEBCHAT_SITES = {
     "deepseek": {
         "name": "DeepSeek",
         "url": "https://chat.deepseek.com",
-        "auth_cookies": ["user_token", "token", "auth_token", "session_id", "ds_token"],
+        "auth_cookies": ["user_token", "token", "auth_token", "ds_token", "chat_token", "session_id"],
         "auth_domains": ["deepseek.com"],
     },
     "ernie": {
         "name": "文心一言",
         "url": "https://yiyan.baidu.com",
-        "auth_cookies": ["BDUSS", "STOKEN", "BAIDUID", "BDTOKEN", "BIDUPSID"],
+        "auth_cookies": ["BDUSS", "STOKEN", "BAIDUID", "BDTOKEN", "BIDUPSID", "BDUSS_BFESS"],
         "auth_domains": ["baidu.com"],
     },
     "doubao": {
         "name": "豆包",
         "url": "https://www.doubao.com/chat",
-        "auth_cookies": ["sessionid", "sid_tt", "csrf_token", "passport_auth", "is_login"],
+        "auth_cookies": ["sessionid", "sid_tt", "csrf_token", "passport_auth", "is_login", "passport_csrf_token"],
         "auth_domains": ["doubao.com", "volces.com", "bytedance.com"],
     },
     "kimi": {
         "name": "Kimi",
         "url": "https://www.kimi.com",
-        "auth_cookies": ["token", "access_token", "user_id", "refresh_token", "kimi_token"],
+        "auth_cookies": ["kimi-auth", "token", "access_token", "user_id", "refresh_token", "kimi_token", "auth_token"],
         "auth_domains": ["kimi.com", "moonshot.cn"],
     },
     "qwen": {
         "name": "千问",
         "url": "https://www.qianwen.com",
-        "auth_cookies": ["login_sid", "token", "access_token", "csrf_token", "aliyun_login"],
+        "auth_cookies": ["login_sid", "token", "access_token", "csrf_token", "aliyun_login", "ALI_session_v2", "login_aliyunid"],
         "auth_domains": ["qianwen.com", "aliyun.com", "tongyi"],
     },
 }

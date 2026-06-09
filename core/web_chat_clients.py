@@ -211,8 +211,8 @@ class WebChatClientBase:
     # ── 通用等待策略 ──
 
     async def _wait_for_text_stability(self, page: Page, selector: str,
-                                         timeout: int = 120, interval: int = 2,
-                                         stable_threshold: int = 3):
+                                         timeout: int = 120, interval: int = 1,
+                                         stable_threshold: int = 2):
         """通用文本稳定性等待：当文本长度连续 N 次不变时视为完成
 
         Args:
@@ -239,9 +239,9 @@ class WebChatClientBase:
             if current_length > 0 and current_length == last_length:
                 stable_count += 1
                 if stable_count >= stable_threshold:
-                    logger.info(f"WebChat {self.model_key}: response stable after {elapsed}s ({stable_count} checks)")
-                    # 等额外 5 秒，让可能的后续引用卡片加载
-                    await asyncio.sleep(5)
+                    logger.info(f"WebChat {self.model_key}: response stable after {elapsed}s ({stable_count} checks, {current_length} chars)")
+                    # 等额外 2 秒，让可能的后续引用卡片加载
+                    await asyncio.sleep(2)
                     return True
             else:
                 stable_count = 0
@@ -777,6 +777,7 @@ class DoubaoWebChatClient(WebChatClientBase):
 
         豆包会联网搜索，先等搜索指示器消失，再等文本稳定。
         """
+        # 1. 等待搜索指示器消失（如果有）
         try:
             search_indicator = page.locator(self.SEARCH_INDICATOR).first
             if await search_indicator.is_visible(timeout=10000):
@@ -785,12 +786,17 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             pass
 
+        # 2. 等待响应区域出现
         try:
             resp_area = page.locator(self.RESPONSE_SELECTOR).last
             await resp_area.wait_for(state="visible", timeout=30000)
+            logger.info("WebChat doubao: response area visible")
         except Exception:
-            await asyncio.sleep(10)
+            # 没匹配到，给个短暂等待后继续
+            logger.warning("WebChat doubao: response selector not matched, continuing")
+            await asyncio.sleep(2)
 
+        # 3. 等文本稳定
         await self._wait_for_text_stability(
             page, self.RESPONSE_SELECTOR, timeout=timeout
         )

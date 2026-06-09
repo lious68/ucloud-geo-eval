@@ -8,6 +8,7 @@ UCloud GEO 评估框架 - WebChat 浏览器自动化客户端
 """
 import asyncio
 import logging
+import os
 import re
 from typing import Dict, Any, Optional
 
@@ -52,14 +53,25 @@ class WebChatClientBase:
         self._page = None
 
     async def initialize(self):
-        """启动浏览器（在评测开始时调用一次）"""
+        """启动浏览器（在评测开始时调用一次）
+
+        豆包等网站检测 Playwright 自动化浏览器，需要在有 X 显示的环境下
+        使用 headless=False（配合 xvfb-run）才能绕过反爬检测。
+        服务器上 systemd 服务需用 xvfb-run 启动 uvicorn。
+        """
         if not self.is_configured:
             logger.warning(f"WebChat {self.model_key}: 无认证状态，无法评测")
             return False
 
         self._playwright = await async_playwright().start()
+
+        # 检测是否有 DISPLAY 环境变量（xvfb 提供），有则用 headed 模式绕过反爬
+        has_display = os.environ.get("DISPLAY") is not None
+        headless_mode = not has_display
+        logger.info(f"WebChat {self.model_key}: headless={headless_mode}, DISPLAY={os.environ.get('DISPLAY', 'none')}")
+
         self._browser = await self._playwright.chromium.launch(
-            headless=True,
+            headless=headless_mode,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -67,13 +79,34 @@ class WebChatClientBase:
             ],
         )
 
+        # 反自动化检测：JS 层抹掉 webdriver 指纹
+        stealth_js = """
+        // 删除 navigator.webdriver 属性
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        // 伪装 chrome 对象（headless 缺少 chrome runtime）
+        window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){} };
+        // 伪装 permissions API（headless 返回 'prompt' 而正常浏览器返回 'denied'）
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications'
+                ? Promise.resolve({ state: Notification.permission })
+                : originalQuery(parameters)
+        );
+        // 伪装 plugins（headless 无 plugins）
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        // 伪装 languages
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+        """
+
         self._context = await self._browser.new_context(
             storage_state=self._auth_state,
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
+        # 在每个页面创建前注入反检测脚本
+        await self._context.add_init_script(stealth_js)
         self._page = await self._context.new_page()
-        logger.info(f"WebChat {self.model_key}: 浏览器已启动")
+        logger.info(f"WebChat {self.model_key}: 浏览器已启动 (headless={headless_mode})")
         return True
 
     async def chat(self, question: str) -> Dict[str, Any]:
@@ -701,22 +734,43 @@ class DoubaoWebChatClient(WebChatClientBase):
         await input_el.click()
         await asyncio.sleep(0.3)
 
-        tag = await input_el.evaluate("el => el.tagName")
-        if tag == "TEXTAREA":
-            await input_el.fill(question)
-        else:
-            await page.keyboard.type(question, delay=30)
+        # 统一用 keyboard.type() 模拟真实键盘输入。
+        # fill() 会绕过 React onChange，导致发送按钮无法激活。
+        await page.keyboard.type(question, delay=30)
 
     async def _send_question(self, page: Page):
         """发送问题"""
+        # 先尝试点击发送按钮（多种选择器回退）
         try:
-            send_btn = page.locator(self.SEND_SELECTOR).first
-            if await send_btn.is_visible(timeout=5000):
-                await send_btn.click()
-            else:
-                await page.keyboard.press("Enter")
+            for selector in [
+                "button[aria-label='发送']",
+                "button[aria-label='Send']",
+                "[class*='send-btn']",
+                "[class*='send-button']",
+                "[data-testid='send-button']",
+            ]:
+                btn = page.locator(selector).first
+                if await btn.is_visible(timeout=2000):
+                    await btn.click()
+                    logger.info("WebChat doubao: sent via button click")
+                    return
         except Exception:
-            await page.keyboard.press("Enter")
+            pass
+
+        # 回退 1: 聚焦输入框后按 Enter
+        try:
+            input_el = page.locator(self.INPUT_SELECTOR).first
+            await input_el.click()
+            await asyncio.sleep(0.2)
+            await input_el.press("Enter")
+            logger.info("WebChat doubao: sent via Enter on input")
+            return
+        except Exception:
+            pass
+
+        # 回退 2: 全局 Enter
+        await page.keyboard.press("Enter")
+        logger.info("WebChat doubao: sent via global Enter")
 
     async def _wait_for_response(self, page: Page, timeout: int = 120):
         """等待豆包响应完成

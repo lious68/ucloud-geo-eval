@@ -696,6 +696,7 @@ class DoubaoWebChatClient(WebChatClientBase):
     """
 
     # ── 豆包选择器 ──
+    # 豆包的响应在消息气泡中，可能使用多种 class 模式
     INPUT_SELECTOR = (
         "textarea[class*='chat-input'], textarea[class*='input'], textarea[class*='samantha'], "
         "[contenteditable='true'], "
@@ -711,6 +712,23 @@ class DoubaoWebChatClient(WebChatClientBase):
         "[class*='response'], [class*='assistant'], "
         "[role='article'], [class*='chat-message']"
     )
+    # 扩展：豆包可能用的响应区域选择器
+    RESPONSE_FALLBACKS = [
+        # 通用聊天消息容器
+        "[class*='message']",
+        "[class*='msg']",
+        "[class*='assistant']",
+        "[class*='bot']",
+        # 豆包 Semi Design / samantha 系列
+        "[class*='samantha']",
+        "[class*='semi']",
+        # 内容区域
+        "[class*='content']",
+        "[class*='chat-content']",
+        # 最后一个非空的文本容器（兜底）
+        "main",
+        "article",
+    ]
     NEW_CHAT_SELECTOR = (
         "button[class*='new-chat'], "
         "button[aria-label*='新建对话'], "
@@ -718,7 +736,7 @@ class DoubaoWebChatClient(WebChatClientBase):
         "a[class*='sidebar'][href*='chat']"
     )
     SEARCH_INDICATOR = (
-        "[class*='searching'], [class*='searching'], "
+        "[class*='searching'], "
         "[class*='联网'], [class*='search-result']"
     )
 
@@ -776,6 +794,7 @@ class DoubaoWebChatClient(WebChatClientBase):
         """等待豆包响应完成
 
         豆包会联网搜索，先等搜索指示器消失，再等文本稳定。
+        如果主选择器匹配不到，用更广泛的选择器回退。
         """
         # 1. 等待搜索指示器消失（如果有）
         try:
@@ -786,40 +805,90 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             pass
 
-        # 2. 等待响应区域出现
-        try:
-            resp_area = page.locator(self.RESPONSE_SELECTOR).last
-            await resp_area.wait_for(state="visible", timeout=30000)
-            logger.info("WebChat doubao: response area visible")
-        except Exception:
-            # 没匹配到，给个短暂等待后继续
-            logger.warning("WebChat doubao: response selector not matched, continuing")
-            await asyncio.sleep(2)
+        # 2. 等待响应区域出现 — 尝试主选择器
+        matched = False
+        for selector in [self.RESPONSE_SELECTOR] + self.RESPONSE_FALLBACKS:
+            try:
+                resp_area = page.locator(selector).last
+                if await resp_area.is_visible(timeout=3000):
+                    logger.info(f"WebChat doubao: matched response selector '{selector[:40]}...'")
+                    matched = True
+                    break
+            except Exception:
+                continue
 
-        # 3. 等文本稳定
-        await self._wait_for_text_stability(
-            page, self.RESPONSE_SELECTOR, timeout=timeout
-        )
+        if not matched:
+            logger.warning("WebChat doubao: no response selector matched, waiting for general content")
+            # 如果所有选择器都失败，给一个较长的等待然后继续
+            await asyncio.sleep(15)
+
+        # 3. 等文本稳定（如果匹配到选择器）
+        if matched:
+            await self._wait_for_text_stability(
+                page, selector, timeout=timeout
+            )
 
     async def _extract_response(self, page: Page) -> str:
-        """提取豆包响应文本"""
+        """提取豆包响应文本 — 带多层回退策略"""
+        # 尝试主选择器
+        selectors_to_try = [self.RESPONSE_SELECTOR] + self.RESPONSE_FALLBACKS
+
+        for selector in selectors_to_try:
+            try:
+                area = page.locator(selector).last
+                if await area.is_visible(timeout=2000):
+                    text = await area.inner_text()
+                    if text and len(text.strip()) > 10:
+                        logger.info(f"WebChat doubao: extracted {len(text)} chars via '{selector[:40]}...'")
+                        return self._append_citations(page, area, text)
+            except Exception:
+                continue
+
+        # 所有选择器都失败 → 用 JS 提取页面可见文本（排除输入框/按钮/导航）
+        logger.warning("WebChat doubao: all selectors failed, extracting visible text")
+        text = await page.evaluate("""() => {
+            // 排除 UI 元素：输入框、按钮、侧边栏、顶部导航
+            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer';
+            // 获取 body 中所有可见文本节点
+            const walker = document.createTreeWalker(
+                document.body,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: (node) => {
+                        if (!node.parentElement) return NodeFilter.FILTER_REJECT;
+                        if (node.parentElement.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                        if (node.parentElement.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"]'))
+                            return NodeFilter.FILTER_REJECT;
+                        const t = node.textContent.trim();
+                        if (t.length < 5) return NodeFilter.FILTER_REJECT;
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                }
+            );
+            const texts = [];
+            let n;
+            while (n = walker.nextNode()) texts.push(n.textContent.trim());
+            return texts.join('\\n').trim();
+        }""")
+
+        if text:
+            logger.info(f"WebChat doubao: extracted {len(text)} chars via visible text fallback")
+        return text
+
+    def _append_citations(self, page: Page, area, text: str) -> str:
+        """附加引用链接到响应文本"""
         try:
-            response_area = page.locator(self.RESPONSE_SELECTOR).last
-            await response_area.wait_for(state="visible", timeout=10000)
+            links = area.evaluate("""
+                el => {
+                    const links = el.querySelectorAll('a[href]');
+                    return Array.from(links).map(a => ({
+                        text: a.textContent.trim(),
+                        href: a.href
+                    }));
+                }
+            """)
         except Exception:
-            return ""
-
-        text = await response_area.inner_text()
-
-        links = await response_area.evaluate("""
-            el => {
-                const links = el.querySelectorAll('a[href]');
-                return Array.from(links).map(a => ({
-                    text: a.textContent.trim(),
-                    href: a.href
-                }));
-            }
-        """)
+            return text
 
         if links:
             citation_lines = []

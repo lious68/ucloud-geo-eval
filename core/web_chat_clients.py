@@ -490,7 +490,7 @@ class DeepSeekWebChatClient(WebChatClientBase):
 class ErnieWebChatClient(WebChatClientBase):
     """文心一言 (yiyan.baidu.com) WebChat 客户端
 
-    百度的 AI 聊天平台，支持联网搜索。
+    百度的 AI 聊天平台，支持联网搜索和深度思考。
     Baidu 使用哈希化的 CSS 类名（如 editable__T7WAW4uW），
     因此选择器以结构/语义属性为主，辅以类名模式匹配。
     """
@@ -503,15 +503,12 @@ class ErnieWebChatClient(WebChatClientBase):
     )
     SEND_SELECTOR = (
         "button[aria-label*='发送'], button[aria-label*='Send'], "
-        "button[class*='send'], button[class*='submit'], "
-        "button[class*='ebButton--primary']"
+        "button[class*='send']"
     )
+    # 回答容器：answerBox 是最终输出区域（含思考+答案）
     RESPONSE_SELECTOR = (
-        "[class*='message-content'], "
-        "[class*='response'], "
-        "[class*='markdown'], "
-        "[class*='assistant'], "
-        "[role='article']"
+        "[class*='answerBox'], "
+        "[class*='answer']"
     )
     NEW_CHAT_SELECTOR = (
         "button[aria-label*='新建'], "
@@ -539,54 +536,85 @@ class ErnieWebChatClient(WebChatClientBase):
         await page.keyboard.type(question, delay=30)
 
     async def _send_question(self, page: Page):
-        """发送问题"""
+        """发送问题（优先按 Enter，更可靠）"""
         try:
             send_btn = page.locator(self.SEND_SELECTOR).first
-            if await send_btn.is_visible(timeout=5000):
+            if await send_btn.is_visible(timeout=3000):
                 await send_btn.click()
             else:
                 await page.keyboard.press("Enter")
         except Exception:
             await page.keyboard.press("Enter")
 
-    async def _wait_for_response(self, page: Page, timeout: int = 120):
+    async def _wait_for_response(self, page: Page, timeout: int = 180):
         """等待文心一言响应完成
 
-        文心一言可能联网搜索，先检测搜索指示器，
-        然后等文本稳定。
+        文心一言有"深度思考"模式，会先输出思考过程再输出最终答案。
+        等待策略：先等 answerBox 出现 → 等深度思考完成 → 等文本稳定
         """
-        # 尝试检测搜索指示器
+        # 等待回答区域出现
         try:
-            search_el = page.locator("[class*='searching'], [class*='loading']").first
-            if await search_el.is_visible(timeout=5000):
-                await search_el.wait_for(state="hidden", timeout=60000)
-                logger.info(f"WebChat ernie: search completed")
-        except Exception:
-            pass
-
-        # 等响应区域出现 + 文本稳定
-        try:
-            resp_area = page.locator(self.RESPONSE_SELECTOR).last
+            resp_area = page.locator("[class*='answerBox'], [class*='answer']").last
             await resp_area.wait_for(state="visible", timeout=30000)
         except Exception:
             await asyncio.sleep(10)
 
+        # 等待深度思考完成：思考中会显示"深度思考中..."之类的指示器
+        try:
+            thinking_el = page.locator("[class*='thinking'], [class*='loading']").first
+            if await thinking_el.is_visible(timeout=5000):
+                await thinking_el.wait_for(state="hidden", timeout=120000)
+                logger.info(f"WebChat ernie: deep thinking completed")
+        except Exception:
+            pass
+
+        # 等文本稳定（文心思考模式较慢，给更长的稳定等待时间）
         await self._wait_for_text_stability(
-            page, self.RESPONSE_SELECTOR, timeout=timeout
+            page, "[class*='answerBox'], [class*='answer']", timeout=timeout
         )
 
     async def _extract_response(self, page: Page) -> str:
-        """提取文心一言响应文本"""
+        """提取文心一言响应文本
+
+        文心一言的回答区域包含"深度思考"过程和最终答案。
+        需要过滤掉思考过程的文本，只保留最终答案。
+        """
         try:
-            response_area = page.locator(self.RESPONSE_SELECTOR).last
-            await response_area.wait_for(state="visible", timeout=10000)
+            answer_box = page.locator("[class*='answerBox'], [class*='answer']").last
+            await answer_box.wait_for(state="visible", timeout=10000)
         except Exception:
             return ""
 
-        text = await response_area.inner_text()
+        # 提取最终答案：获取最后一个 agent-markdown 的内容
+        # 文心一言的 answerBox 结构：
+        #   - 思考过程（第一个 agent-markdown）
+        #   - "准备输出结果" 分隔线
+        #   - 最终答案文本
+        text = await answer_box.evaluate("""el => {
+            // 尝试获取最终答案文本
+            // 思考过程在 agent-markdown 元素中，最终答案在它们之后
+            const allText = el.innerText || '';
 
-        # 提取链接
-        links = await response_area.evaluate("""
+            // 如果有"准备输出结果"分隔线，取其之后的内容
+            const marker = '准备输出结果';
+            const idx = allText.lastIndexOf(marker);
+            if (idx !== -1) {
+                return allText.substring(idx + marker.length).trim();
+            }
+
+            // 如果有"思考完成"分隔线，取其之后的内容
+            const thinkMarker = '思考完成';
+            const thinkIdx = allText.lastIndexOf(thinkMarker);
+            if (thinkIdx !== -1) {
+                return allText.substring(thinkIdx + thinkMarker.length).trim();
+            }
+
+            // 兜底：取全文
+            return allText;
+        }""")
+
+        # 提取链接（从整个 answerBox 中获取）
+        links = await answer_box.evaluate("""
             el => {
                 const links = el.querySelectorAll('a[href]');
                 return Array.from(links).map(a => ({

@@ -28,6 +28,37 @@ class EvaluationResponse(BaseModel):
     completed_at: Optional[str] = None
 
 
+class ResultImport(BaseModel):
+    """导入单条评测结果"""
+    question_id: str
+    model_key: str
+    model_name: str
+    ucloud_mentioned: bool = False
+    ucloud_mention_count: int = 0
+    ucloud_rank: Optional[int] = None
+    has_citation: bool = False
+    citation_count: int = 0
+    ucloud_recommended: bool = False
+    recommendation_strength: str = "none"
+    sentiment_score: float = 0.5
+    sentiment_label: str = "neutral"
+    position_weight: float = 0.0
+    response_length: int = 0
+    raw_content: str = ""
+    competitor_mentions: str = "{}"
+    error_message: Optional[str] = None
+    citations: str = "[]"
+    all_cited_urls: str = "[]"
+
+
+class ResultsBatchImport(BaseModel):
+    """批量导入评测结果"""
+    name: str = "GEO评估"
+    model_key: str
+    mode: str = "webchat"
+    results: List[ResultImport]
+
+
 # ============ 问题 ============
 
 class QuestionCreate(BaseModel):

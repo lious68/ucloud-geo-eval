@@ -230,8 +230,13 @@ class WebChatClientBase:
             elapsed += interval
 
             try:
+                # 使用 querySelectorAll 取最后一个元素，与 page.locator(selector).last 一致
                 current_length = await page.evaluate(
-                    f"() => (document.querySelector('{selector}')?.innerText || '').length"
+                    f"() => {{ "
+                    f"  const els = document.querySelectorAll('{selector}'); "
+                    f"  if (!els.length) return 0; "
+                    f"  return (els[els.length - 1]?.innerText || '').length; "
+                    f"}}"
                 )
             except Exception:
                 current_length = 0
@@ -247,7 +252,7 @@ class WebChatClientBase:
                 stable_count = 0
                 last_length = current_length
 
-        logger.warning(f"WebChat {self.model_key}: response timeout after {timeout}s")
+        logger.warning(f"WebChat {self.model_key}: response timeout after {timeout}s, last_length={last_length}")
         return False
 
 
@@ -793,8 +798,8 @@ class DoubaoWebChatClient(WebChatClientBase):
     async def _wait_for_response(self, page: Page, timeout: int = 120):
         """等待豆包响应完成
 
-        豆包会联网搜索，先等搜索指示器消失，再等文本稳定。
-        如果主选择器匹配不到，用更广泛的选择器回退。
+        策略：等搜索指示器消失 → 基础等待 → 用 JS 提取可见文本检查。
+        不依赖 CSS 选择器匹配（豆包 DOM 结构不确定）。
         """
         # 1. 等待搜索指示器消失（如果有）
         try:
@@ -805,62 +810,87 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             pass
 
-        # 2. 等待响应区域出现 — 尝试主选择器
-        matched = False
-        for selector in [self.RESPONSE_SELECTOR] + self.RESPONSE_FALLBACKS:
-            try:
-                resp_area = page.locator(selector).last
-                if await resp_area.is_visible(timeout=3000):
-                    logger.info(f"WebChat doubao: matched response selector '{selector[:40]}...'")
-                    matched = True
-                    break
-            except Exception:
-                continue
+        # 2. 等 AI 生成回答，定期检查文本增长
+        start_text_len = await self._get_visible_text_len(page)
+        logger.info(f"WebChat doubao: waiting for response (initial text: {start_text_len} chars)")
 
-        if not matched:
-            logger.warning("WebChat doubao: no response selector matched, waiting for general content")
-            # 如果所有选择器都失败，给一个较长的等待然后继续
-            await asyncio.sleep(15)
+        max_wait = 90  # 最多等 90 秒
+        elapsed = 0
+        no_change_count = 0
 
-        # 3. 等文本稳定（如果匹配到选择器）
-        if matched:
-            await self._wait_for_text_stability(
-                page, selector, timeout=timeout
-            )
+        while elapsed < max_wait:
+            await asyncio.sleep(5)
+            elapsed += 5
+
+            current_len = await self._get_visible_text_len(page)
+            logger.info(f"WebChat doubao: text len after {elapsed}s: {current_len} chars")
+
+            if current_len > start_text_len + 50:
+                # 文本增长了，继续等一会看是否停止增长
+                if current_len == start_text_len:
+                    no_change_count += 1
+                else:
+                    no_change_count = 0
+                    start_text_len = current_len
+
+                if no_change_count >= 2:
+                    logger.info(f"WebChat doubao: response complete ({current_len} chars)")
+                    return
+
+    async def _get_visible_text_len(self, page: Page) -> int:
+        """用 JS 提取页面可见文本长度（排除 UI 元素、隐藏元素、script/style）"""
+        try:
+            text = await page.evaluate("""() => {
+                const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: (node) => {
+                            const parent = node.parentElement;
+                            if (!parent) return NodeFilter.FILTER_REJECT;
+                            if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                            if (parent.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"], [class*="header"], [class*="logo"], [class*="brand"]'))
+                                return NodeFilter.FILTER_REJECT;
+                            // 检查可见性
+                            const style = window.getComputedStyle(parent);
+                            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
+                                return NodeFilter.FILTER_REJECT;
+                            const t = node.textContent.trim();
+                            if (t.length < 3) return NodeFilter.FILTER_REJECT;
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                );
+                let total = 0;
+                let n;
+                while (n = walker.nextNode()) total += n.textContent.length;
+                return total;
+            }""")
+            return text or 0
+        except Exception:
+            return 0
 
     async def _extract_response(self, page: Page) -> str:
-        """提取豆包响应文本 — 带多层回退策略"""
-        # 尝试主选择器
-        selectors_to_try = [self.RESPONSE_SELECTOR] + self.RESPONSE_FALLBACKS
-
-        for selector in selectors_to_try:
-            try:
-                area = page.locator(selector).last
-                if await area.is_visible(timeout=2000):
-                    text = await area.inner_text()
-                    if text and len(text.strip()) > 10:
-                        logger.info(f"WebChat doubao: extracted {len(text)} chars via '{selector[:40]}...'")
-                        return self._append_citations(page, area, text)
-            except Exception:
-                continue
-
-        # 所有选择器都失败 → 用 JS 提取页面可见文本（排除输入框/按钮/导航）
-        logger.warning("WebChat doubao: all selectors failed, extracting visible text")
+        """提取豆包响应文本 — 用 JS 提取页面可见文本（排除隐藏元素）"""
         text = await page.evaluate("""() => {
-            // 排除 UI 元素：输入框、按钮、侧边栏、顶部导航
-            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer';
-            // 获取 body 中所有可见文本节点
+            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
             const walker = document.createTreeWalker(
                 document.body,
                 NodeFilter.SHOW_TEXT,
                 {
                     acceptNode: (node) => {
-                        if (!node.parentElement) return NodeFilter.FILTER_REJECT;
-                        if (node.parentElement.closest(exclude)) return NodeFilter.FILTER_REJECT;
-                        if (node.parentElement.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"]'))
+                        const parent = node.parentElement;
+                        if (!parent) return NodeFilter.FILTER_REJECT;
+                        if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                        if (parent.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"], [class*="header"], [class*="logo"], [class*="brand"]'))
+                            return NodeFilter.FILTER_REJECT;
+                        // 检查可见性
+                        const style = window.getComputedStyle(parent);
+                        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
                             return NodeFilter.FILTER_REJECT;
                         const t = node.textContent.trim();
-                        if (t.length < 5) return NodeFilter.FILTER_REJECT;
+                        if (t.length < 3) return NodeFilter.FILTER_REJECT;
                         return NodeFilter.FILTER_ACCEPT;
                     }
                 }
@@ -872,38 +902,8 @@ class DoubaoWebChatClient(WebChatClientBase):
         }""")
 
         if text:
-            logger.info(f"WebChat doubao: extracted {len(text)} chars via visible text fallback")
-        return text
-
-    def _append_citations(self, page: Page, area, text: str) -> str:
-        """附加引用链接到响应文本"""
-        try:
-            links = area.evaluate("""
-                el => {
-                    const links = el.querySelectorAll('a[href]');
-                    return Array.from(links).map(a => ({
-                        text: a.textContent.trim(),
-                        href: a.href
-                    }));
-                }
-            """)
-        except Exception:
-            return text
-
-        if links:
-            citation_lines = []
-            for i, link in enumerate(links):
-                href = link["href"]
-                if href.startswith("javascript:") or href.startswith("#"):
-                    continue
-                if "doubao.com" in href and "/chat" in href:
-                    continue
-                link_text = link["text"] or f"[{i+1}]"
-                citation_lines.append(f"[{i+1}] {link_text}: {href}")
-            if citation_lines:
-                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
-
-        return text
+            logger.info(f"WebChat doubao: extracted {len(text)} chars via visible text")
+        return text or ""
 
     async def _start_new_chat(self, page: Page):
         """开始新对话"""

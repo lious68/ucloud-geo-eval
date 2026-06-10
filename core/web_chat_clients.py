@@ -872,37 +872,91 @@ class DoubaoWebChatClient(WebChatClientBase):
             return 0
 
     async def _extract_response(self, page: Page) -> str:
-        """提取豆包响应文本 — 用 JS 提取页面可见文本（排除隐藏元素）"""
-        text = await page.evaluate("""() => {
-            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
-            const walker = document.createTreeWalker(
-                document.body,
-                NodeFilter.SHOW_TEXT,
-                {
-                    acceptNode: (node) => {
-                        const parent = node.parentElement;
-                        if (!parent) return NodeFilter.FILTER_REJECT;
-                        if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
-                        if (parent.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"], [class*="header"], [class*="logo"], [class*="brand"]'))
-                            return NodeFilter.FILTER_REJECT;
-                        // 检查可见性
-                        const style = window.getComputedStyle(parent);
-                        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
-                            return NodeFilter.FILTER_REJECT;
-                        const t = node.textContent.trim();
-                        if (t.length < 3) return NodeFilter.FILTER_REJECT;
-                        return NodeFilter.FILTER_ACCEPT;
-                    }
-                }
-            );
-            const texts = [];
-            let n;
-            while (n = walker.nextNode()) texts.push(n.textContent.trim());
-            return texts.join('\\n').trim();
-        }""")
+        """提取豆包响应文本，包括引用链接
 
-        if text:
-            logger.info(f"WebChat doubao: extracted {len(text)} chars via visible text")
+        优先用 RESPONSE_SELECTOR 定位响应区域提取文本和链接，
+        回退到 TreeWalker 提取可见文本（兼容旧版页面）。
+        """
+        text = ""
+        links = []
+
+        # 1) 尝试用 RESPONSE_SELECTOR 定位响应区域
+        try:
+            response_area = page.locator(self.RESPONSE_SELECTOR).last
+            await response_area.wait_for(state="visible", timeout=5000)
+            text = await response_area.inner_text()
+
+            # 提取响应区域内的 <a href> 链接
+            links = await response_area.evaluate("""
+                el => {
+                    const links = el.querySelectorAll('a[href]');
+                    return Array.from(links).map(a => ({
+                        text: a.textContent.trim(),
+                        href: a.href
+                    }));
+                }
+            """)
+            logger.info(f"WebChat doubao: extracted {len(text)} chars via RESPONSE_SELECTOR, {len(links)} links")
+        except Exception:
+            # 2) 回退：TreeWalker 提取可见文本
+            logger.info("WebChat doubao: RESPONSE_SELECTOR failed, falling back to TreeWalker")
+
+            # 同时从整个页面提取链接作为补充
+            try:
+                links = await page.evaluate("""() => {
+                    const links = document.querySelectorAll('a[href]');
+                    return Array.from(links).map(a => ({
+                        text: a.textContent.trim(),
+                        href: a.href
+                    }));
+                }""")
+            except Exception:
+                links = []
+
+            text = await page.evaluate("""() => {
+                const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: (node) => {
+                            const parent = node.parentElement;
+                            if (!parent) return NodeFilter.FILTER_REJECT;
+                            if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                            if (parent.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"], [class*="header"], [class*="logo"], [class*="brand"]'))
+                                return NodeFilter.FILTER_REJECT;
+                            const style = window.getComputedStyle(parent);
+                            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
+                                return NodeFilter.FILTER_REJECT;
+                            const t = node.textContent.trim();
+                            if (t.length < 3) return NodeFilter.FILTER_REJECT;
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                );
+                const texts = [];
+                let n;
+                while (n = walker.nextNode()) texts.push(n.textContent.trim());
+                return texts.join('\\n').trim();
+            }""")
+            if text:
+                logger.info(f"WebChat doubao: extracted {len(text)} chars via TreeWalker fallback, {len(links)} links")
+
+        # 3) 将链接追加到文本末尾（与其他客户端一致：Kimi/Qwen/DeepSeek/Ernie）
+        if links:
+            citation_lines = []
+            for i, link in enumerate(links):
+                href = link.get("href", "")
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                if "doubao.com" in href and "/chat" in href:
+                    continue
+                link_text = link.get("text") or f"[{i+1}]"
+                citation_lines.append(f"[{i+1}] {link_text}: {href}")
+
+            if citation_lines:
+                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
         return text or ""
 
     async def _start_new_chat(self, page: Page):

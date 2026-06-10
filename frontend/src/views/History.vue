@@ -42,10 +42,10 @@
                 :stroke-width="10" style="width:70px" />
             </template>
           </el-table-column>
-          <el-table-column label="最佳GEO" width="100">
+          <el-table-column label="GEO综合得分" width="120">
             <template #default="{ row }">
-              <strong v-if="row.best_geo != null" :class="row.best_geo >= 30 ? 'score-good' : 'score-low'">
-                {{ row.best_geo.toFixed(1) }}
+              <strong v-if="row.geo_composite != null" :class="row.geo_composite >= 30 ? 'score-good' : 'score-low'">
+                {{ row.geo_composite.toFixed(1) }}
               </strong>
               <span v-else style="color:#c0c4cc">—</span>
             </template>
@@ -153,15 +153,17 @@ async function loadRuns() {
     const res = await apiFetch('/evaluations?limit=50')
     runs.value = res.data || []
 
-    // 为已完成的评测加载最佳 GEO 得分
+    // 为已完成的评测加载 GEO 综合得分（与仪表盘算法一致）
     for (const run of runs.value) {
       if (run.status === 'completed') {
         try {
           const scoresRes = await apiFetch(`/results/${run.id}/scores`)
           const scores = scoresRes.data || []
           if (scores.length) {
-            run.best_geo = Math.max(...scores.map(s => s.geo_score || 0))
-            run.metric_averages = calcMetricAverages(scores)
+            // 各渠道指标取平均，再按权重计算综合得分
+            const avg = calcMetricAverages(scores)
+            run.geo_composite = (avg.coverage_rate * 0.45 + avg.citation_rate * 0.25 + avg.recommendation_rate * 0.20 + avg.sentiment_score * 0.10) * 100
+            run.metric_averages = avg
           }
         } catch { /* ignore */ }
       }
@@ -186,7 +188,7 @@ function renderTrendChart() {
   const data = completedRuns.value.slice().reverse()
 
   const dates = data.map(r => formatTime(r.started_at))
-  const geoScores = data.map(r => r.best_geo ?? 0)
+  const geoScores = data.map(r => r.geo_composite ?? 0)
 
   const chart = echarts.init(trendChartRef.value)
   chart.setOption({

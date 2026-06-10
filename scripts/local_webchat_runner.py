@@ -216,58 +216,85 @@ async def run_local_eval(
         return
     print(f"  可用: {', '.join(MODEL_NAMES.get(k, k) for k in clients)}")
 
-    # 3. 执行评测
+    # 3. 执行评测 — 多模型并发
     print("[3/5] 开始评测...")
     analyzer = ResponseAnalyzer()
     calculator = MetricsCalculator()
-    total = len(questions) * len(model_keys)
-    completed = 0
+    total = len(questions) * len([mk for mk in model_keys if mk in clients])
     all_results: Dict[str, List] = {mk: [] for mk in model_keys}
 
+    # 全局计数器（多模型并发时共享）
+    completed_lock = asyncio.Lock()
+    completed = [0]  # 用列表实现可变计数
+
+    async def eval_single_model(mk: str, client, model_name: str, questions: List[Dict]):
+        """单个模型的评测协程"""
+        results = []
+        print(f"\n  --- {model_name} 开始 ---")
+        for q in questions:
+            qid = q["id"]
+            try:
+                response = await client.chat(q["question"])
+                if response.get("error"):
+                    async with completed_lock:
+                        completed[0] += 1
+                        c = completed[0]
+                    print(f"    [{c}/{total}] {mk}:{qid} ❌ {response['error'][:80]}")
+                    result = _empty_result(qid, mk, response["error"])
+                else:
+                    content = response.get("content", "")
+                    analysis = analyzer.analyze(
+                        question_id=qid,
+                        model_key=mk,
+                        model_name=model_name,
+                        content=content,
+                        error=response.get("error"),
+                    )
+                    result = _analysis_to_dict(analysis)
+                    async with completed_lock:
+                        completed[0] += 1
+                        c = completed[0]
+                    ucloud = "✅" if analysis.ucloud_mentioned else "—"
+                    cit = f"📎{analysis.citation_count}" if analysis.has_citation else ""
+                    rec = f"⭐{analysis.ucloud_recommendation_strength}" if analysis.ucloud_recommended else ""
+                    print(f"    [{c}/{total}] {mk}:{qid} {ucloud} {cit} {rec} ({len(content)}字)")
+            except Exception as e:
+                async with completed_lock:
+                    completed[0] += 1
+                    c = completed[0]
+                print(f"    [{c}/{total}] {mk}:{qid} ❌ {str(e)[:80]}")
+                result = _empty_result(qid, mk, str(e))
+
+            results.append(result)
+
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        print(f"  --- {model_name} 完成 ({len(results)}条) ---")
+        return mk, results
+
+    # 并发执行所有模型
+    tasks = []
     for mk in model_keys:
         client = clients.get(mk)
         model_name = MODEL_NAMES.get(mk, mk)
         if client:
-            print(f"\n  --- {model_name} ---")
+            tasks.append(eval_single_model(mk, client, model_name, questions))
         else:
-            print(f"\n  --- {model_name} (跳过，无认证) ---")
+            # 无认证的模型，直接生成空结果
+            for q in questions:
+                all_results[mk].append(_empty_result(q["id"], mk, "WebChat 未配置登录状态"))
+            async with completed_lock:
+                completed[0] += len(questions)
 
-        for q in questions:
-            completed += 1
-            qid = q["id"]
-            qtext = q["question"][:50]
-
-            if client:
-                try:
-                    response = await client.chat(q["question"])
-                    if response.get("error"):
-                        print(f"    [{completed}/{total}] {qid} ❌ {response['error'][:80]}")
-                        result = _empty_result(qid, mk, response["error"])
-                    else:
-                        content = response.get("content", "")
-                        analysis = analyzer.analyze(
-                            question_id=qid,
-                            model_key=mk,
-                            model_name=model_name,
-                            content=content,
-                            error=response.get("error"),
-                        )
-                        result = _analysis_to_dict(analysis)
-                        ucloud = "✅" if analysis.ucloud_mentioned else "—"
-                        cit = f"📎{analysis.citation_count}" if analysis.has_citation else ""
-                        rec = f"⭐{analysis.ucloud_recommendation_strength}" if analysis.ucloud_recommended else ""
-                        print(f"    [{completed}/{total}] {qid} {ucloud} {cit} {rec} ({len(content)}字)")
-                except Exception as e:
-                    print(f"    [{completed}/{total}] {qid} ❌ {str(e)[:80]}")
-                    result = _empty_result(qid, mk, str(e))
+    if tasks:
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+        for item in results_list:
+            if isinstance(item, Exception):
+                print(f"  ⚠️ 模型评测异常: {item}")
             else:
-                print(f"    [{completed}/{total}] {qid} ⏭️ 跳过")
-                result = _empty_result(qid, mk, "WebChat 未配置登录状态")
-
-            all_results[mk].append(result)
-
-            if delay > 0:
-                await asyncio.sleep(delay)
+                mk, results = item
+                all_results[mk] = results
 
     # 4. 计算评分
     print("\n[4/5] 计算 GEO 评分...")

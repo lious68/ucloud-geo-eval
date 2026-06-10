@@ -278,84 +278,250 @@ class KimiWebChatClient(WebChatClientBase):
         await asyncio.sleep(2)
 
     async def _type_question(self, page: Page, question: str):
-        """在输入框中输入问题（Kimi 用 contenteditable div，不是 textarea）"""
-        input_box = page.locator(self.INPUT_SELECTOR).first
-        await input_box.wait_for(state="visible", timeout=10000)
+        """在输入框中输入问题（Kimi 用 contenteditable div）
+
+        用 JS 直接设置文本，比 keyboard.type 快得多，不会超时。
+        """
+        # 找到输入框
+        input_box = None
+        for selector in [
+            "div.chat-input-editor",
+            "[contenteditable='true']",
+            "[role='textbox']",
+        ]:
+            try:
+                box = page.locator(selector).first
+                if await box.is_visible(timeout=10000):
+                    input_box = box
+                    break
+            except Exception:
+                continue
+
+        if not input_box:
+            await page.screenshot(path="output/kimi_input_debug.png", full_page=True)
+            logger.warning("WebChat kimi: 找不到输入框，已截图到 output/kimi_input_debug.png")
+            raise RuntimeError("Kimi 输入框未找到")
+
+        # 点击输入框聚焦
         await input_box.click()
         await asyncio.sleep(0.3)
-        # contenteditable div 用 fill 不一定可靠，用 type 更接近真实输入
-        await page.keyboard.type(question, delay=30)
+
+        # 用 JS 直接设置文本（比 keyboard.type 快得多，不会超时）
+        await page.evaluate("""(text) => {
+            const el = document.querySelector('[contenteditable="true"]');
+            if (el) {
+                el.textContent = text;
+                el.focus();
+                // 触发 React 兼容的输入事件
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new CompositionEvent('compositionend', { data: text }));
+            }
+        }""", question)
+        await asyncio.sleep(0.5)
+        logger.info(f"WebChat kimi: question typed via JS ({len(question)} chars)")
 
     async def _send_question(self, page: Page):
         """发送问题"""
-        # 尝试点击发送按钮
+        await asyncio.sleep(0.5)
+
+        # 方式1：JS 查找输入框附近的箭头/发送按钮并点击
         try:
-            send_btn = page.locator(self.SEND_SELECTOR).first
-            if await send_btn.is_visible():
-                await send_btn.click()
-            else:
-                # 回退：用 Enter 键发送
-                await page.keyboard.press("Enter")
+            clicked = await page.evaluate("""() => {
+                const inputEl = document.querySelector('[contenteditable="true"]');
+                if (!inputEl) return false;
+                const parent = inputEl.closest('form') || inputEl.parentElement || document.body;
+                // 查找所有可点击元素
+                const candidates = parent.querySelectorAll('button, [role="button"], div[role="button"], svg, img');
+                for (const el of candidates) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 10 || rect.height < 10) continue;
+                    const cls = (el.className || '').toLowerCase();
+                    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    // 发送按钮特征：箭头、发送、submit、up
+                    if (cls.includes('arrow') || cls.includes('send') || cls.includes('submit') ||
+                        cls.includes('up') || aria.includes('send') || aria.includes('发送') ||
+                        aria.includes('提交') || aria.includes('arrow')) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if clicked:
+                logger.info("WebChat kimi: sent via JS button click")
+                return
+        except Exception as e:
+            logger.debug(f"WebChat kimi: JS click failed: {e}")
+
+        # 方式2：在输入框内按 Enter（如果 JS 点击失败）
+        try:
+            await page.evaluate("""() => {
+                const el = document.querySelector('[contenteditable="true"]');
+                if (el) {
+                    el.focus();
+                    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+                }
+            }""")
+            logger.info("WebChat kimi: sent via JS Enter")
+            return
         except Exception:
-            await page.keyboard.press("Enter")
+            pass
+
+        # 方式3：物理 Enter 键
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.3)
+        logger.info("WebChat kimi: sent via physical Enter")
 
     async def _wait_for_response(self, page: Page, timeout: int = 120):
         """等待 Kimi 响应完成
 
         Kimi 搜索流程：先搜索（显示"搜索中..."）→ 再生成回答 → 流式输出
-        等待策略：先等搜索指示器消失，再等文本稳定
+        等待策略：先等搜索指示器消失 → 用可见文本稳定性判断完成
         """
         # 先等搜索指示器出现然后消失
         try:
             search_indicator = page.locator(self.SEARCH_INDICATOR).first
             if await search_indicator.is_visible(timeout=10000):
-                # 等搜索完成
                 await search_indicator.wait_for(state="hidden", timeout=60000)
                 logger.info(f"WebChat kimi: search completed")
         except Exception:
-            # 可能没有搜索指示器，直接继续
             pass
 
-        # 等响应区域出现 + 文本稳定
-        # Kimi 的响应在 segment.segment-assistant 中
-        await page.wait_for_selector("segment.segment-assistant, .segment-assistant", timeout=60000)
-        await self._wait_for_text_stability(
-            page, "segment.segment-assistant, .segment-assistant", timeout=timeout
-        )
+        # 等响应区域出现
+        try:
+            await page.wait_for_selector("segment.segment-assistant, .segment-assistant", timeout=30000)
+        except Exception:
+            pass
+
+        # 用可见文本稳定性判断完成（不依赖单一 CSS 选择器）
+        await self._wait_for_kimi_text_stability(page, timeout=timeout)
+
+    async def _wait_for_kimi_text_stability(self, page: Page, timeout: int = 120):
+        """Kimi 专用文本稳定性检查 — 不依赖单一 CSS 选择器"""
+        start_text_len = await page.evaluate("""() => {
+            // 优先取聊天内容区域
+            const chatArea = document.querySelector(
+                '.chat-content, [class*="chat-content"], [class*="conversation"], main'
+            ) || document.body;
+            const text = chatArea.innerText || '';
+            return text.length;
+        }""")
+        logger.info(f"WebChat kimi: waiting for response (initial text: {start_text_len} chars)")
+
+        stable_count = 0
+        prev_len = start_text_len
+        elapsed = 0
+        interval = 3
+
+        while elapsed < timeout:
+            await asyncio.sleep(interval)
+            elapsed += interval
+
+            current_len = await page.evaluate("""() => {
+                const chatArea = document.querySelector(
+                    '.chat-content, [class*="chat-content"], [class*="conversation"], main'
+                ) || document.body;
+                return (chatArea.innerText || '').length;
+            }""")
+            logger.info(f"WebChat kimi: text len after {elapsed}s: {current_len} chars")
+
+            # 流式输出：每次增长至少 30 字才算在生成
+            if current_len > prev_len + 30:
+                stable_count = 0
+                prev_len = current_len
+            else:
+                stable_count += 1
+                if stable_count >= 3:
+                    # 额外等 2 秒让引用卡片加载
+                    await asyncio.sleep(2)
+                    logger.info(f"WebChat kimi: response complete ({current_len} chars)")
+                    return
 
     async def _extract_response(self, page: Page) -> str:
         """提取 Kimi 响应文本，包括引用链接
 
-        Kimi 的响应在 segment.segment-assistant 中，markdown-container 包含正文
+        策略：
+        1. 尝试用 segment-assistant 选择器提取（如果仍然有效）
+        2. 回退：用 JS 提取聊天区域可见文本（TreeWalker 方式）
         """
-        # 找到响应区域：segment-assistant
+        # 先尝试用 CSS 选择器提取
         try:
             response_area = page.locator("segment.segment-assistant, .segment-assistant").last
-            await response_area.wait_for(state="visible", timeout=10000)
+            await response_area.wait_for(state="visible", timeout=5000)
+            text = await response_area.inner_text()
+
+            if len(text) > 50:
+                # 提取链接
+                links = await response_area.evaluate("""
+                    el => {
+                        const links = el.querySelectorAll('a[href]');
+                        return Array.from(links).map(a => ({
+                            text: a.textContent.trim(),
+                            href: a.href
+                        }));
+                    }
+                """)
+                if links:
+                    citation_lines = []
+                    for i, link in enumerate(links):
+                        href = link["href"]
+                        if href.startswith("javascript:") or href.startswith("#"):
+                            continue
+                        if "kimi.com" in href and "/chat" in href:
+                            continue
+                        link_text = link["text"] or f"[{i+1}]"
+                        citation_lines.append(f"[{i+1}] {link_text}: {href}")
+                    if citation_lines:
+                        text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
+                logger.info(f"WebChat kimi: extracted {len(text)} chars via segment-assistant")
+                return text
         except Exception:
-            # 回退：用 markdown-container
-            try:
-                response_area = page.locator(".markdown-container, .markdown").last
-                await response_area.wait_for(state="visible", timeout=10000)
-            except Exception:
-                # 最终回退：返回空字符串
-                return ""
+            pass
 
-        # 提取纯文本
-        text = await response_area.inner_text()
+        # 回退：用 JS 提取聊天区域可见文本
+        text = await page.evaluate("""() => {
+            // 先尝试定位聊天内容区域
+            const chatArea = document.querySelector(
+                '.chat-content, .conversation, [class*="chat-content"], [class*="conversation"], main'
+            ) || document.body;
 
-        # 提取所有 <a href> 链接
-        links = await response_area.evaluate("""
-            el => {
-                const links = el.querySelectorAll('a[href]');
-                return Array.from(links).map(a => ({
-                    text: a.textContent.trim(),
-                    href: a.href
-                }));
-            }
-        """)
+            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
+            const walker = document.createTreeWalker(
+                chatArea,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: (node) => {
+                        const parent = node.parentElement;
+                        if (!parent) return NodeFilter.FILTER_REJECT;
+                        if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                        if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="logo"], [class*="brand"]'))
+                            return NodeFilter.FILTER_REJECT;
+                        const t = node.textContent.trim();
+                        if (t.length < 3) return NodeFilter.FILTER_REJECT;
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                }
+            );
+            const texts = [];
+            let n;
+            while (n = walker.nextNode()) texts.push(n.textContent.trim());
+            return texts.join('\\n').trim();
+        }""")
 
-        # 将链接追加到文本末尾
+        # 提取所有外部链接
+        links = await page.evaluate("""() => {
+            const chatArea = document.querySelector(
+                '.chat-content, .conversation, [class*="chat-content"], [class*="conversation"], main'
+            ) || document.body;
+            const allLinks = chatArea.querySelectorAll('a[href]');
+            return Array.from(allLinks).map(a => ({
+                text: a.textContent.trim(),
+                href: a.href
+            }));
+        }""")
+
         if links:
             citation_lines = []
             for i, link in enumerate(links):
@@ -366,26 +532,39 @@ class KimiWebChatClient(WebChatClientBase):
                     continue
                 link_text = link["text"] or f"[{i+1}]"
                 citation_lines.append(f"[{i+1}] {link_text}: {href}")
-
             if citation_lines:
                 text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
 
-        return text
+        logger.info(f"WebChat kimi: extracted {len(text)} chars via fallback text extraction")
+        return text or ""
 
     async def _start_new_chat(self, page: Page):
         """开始新对话"""
         try:
-            new_chat_btn = page.locator(self.NEW_CHAT_SELECTOR).first
-            if await new_chat_btn.is_visible(timeout=3):
-                await new_chat_btn.click()
+            # 方式1：用 JS 查找新对话按钮并点击
+            clicked = await page.evaluate("""() => {
+                const buttons = Array.from(document.querySelectorAll('button, a'));
+                for (const btn of buttons) {
+                    const text = (btn.textContent || '').trim();
+                    const cls = (btn.className || '').toLowerCase();
+                    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    if ((text === '新建对话' || text === '新对话' || text.includes('新建') && text.includes('对话'))
+                        || cls.includes('new-chat') || aria.includes('new') || aria.includes('新建')) {
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if clicked:
                 await asyncio.sleep(2)
-            else:
-                # 回退：直接导航到首页
-                await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
-                await asyncio.sleep(2)
+                return
         except Exception:
-            await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
+            pass
+
+        # 方式2：回退到首页
+        await page.goto("https://www.kimi.com", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(2)
 
 
 class DeepSeekWebChatClient(WebChatClientBase):
@@ -798,25 +977,19 @@ class DoubaoWebChatClient(WebChatClientBase):
     async def _wait_for_response(self, page: Page, timeout: int = 120):
         """等待豆包响应完成
 
-        策略：等搜索指示器消失 → 基础等待 → 用 JS 提取可见文本检查。
+        策略：定期检查文本增长 + 稳定性。
+        豆包的搜索元数据（"搜索X个关键词 参考XX篇资料"）
+        在回答完成后出现在响应区域顶部。
         不依赖 CSS 选择器匹配（豆包 DOM 结构不确定）。
         """
-        # 1. 等待搜索指示器消失（如果有）
-        try:
-            search_indicator = page.locator(self.SEARCH_INDICATOR).first
-            if await search_indicator.is_visible(timeout=10000):
-                await search_indicator.wait_for(state="hidden", timeout=60000)
-                logger.info(f"WebChat doubao: search completed")
-        except Exception:
-            pass
-
-        # 2. 等 AI 生成回答，定期检查文本增长
+        # 等 AI 生成回答，定期检查文本增长
         start_text_len = await self._get_visible_text_len(page)
         logger.info(f"WebChat doubao: waiting for response (initial text: {start_text_len} chars)")
 
         max_wait = 90  # 最多等 90 秒
         elapsed = 0
-        no_change_count = 0
+        stable_count = 0  # 连续稳定次数
+        prev_len = start_text_len
 
         while elapsed < max_wait:
             await asyncio.sleep(5)
@@ -825,20 +998,23 @@ class DoubaoWebChatClient(WebChatClientBase):
             current_len = await self._get_visible_text_len(page)
             logger.info(f"WebChat doubao: text len after {elapsed}s: {current_len} chars")
 
-            if current_len > start_text_len + 50:
-                # 文本增长了，继续等一会看是否停止增长
-                if current_len == start_text_len:
-                    no_change_count += 1
-                else:
-                    no_change_count = 0
-                    start_text_len = current_len
-
-                if no_change_count >= 2:
-                    logger.info(f"WebChat doubao: response complete ({current_len} chars)")
+            if current_len > prev_len:
+                # 文本还在增长，重置稳定计数
+                stable_count = 0
+                prev_len = current_len
+            else:
+                # 文本没有增长，增加稳定计数
+                stable_count += 1
+                if stable_count >= 2:
+                    # 文本连续 2 次检查（10秒）没有变化，认为完成
+                    # 额外等 3 秒让搜索元数据卡片加载
+                    await asyncio.sleep(3)
+                    final_len = await self._get_visible_text_len(page)
+                    logger.info(f"WebChat doubao: response complete ({final_len} chars)")
                     return
 
     async def _get_visible_text_len(self, page: Page) -> int:
-        """用 JS 提取页面可见文本长度（排除 UI 元素、隐藏元素、script/style）"""
+        """用 JS 提取页面可见文本长度（排除 UI 元素）"""
         try:
             text = await page.evaluate("""() => {
                 const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
@@ -850,11 +1026,8 @@ class DoubaoWebChatClient(WebChatClientBase):
                             const parent = node.parentElement;
                             if (!parent) return NodeFilter.FILTER_REJECT;
                             if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
-                            if (parent.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"], [class*="header"], [class*="logo"], [class*="brand"]'))
-                                return NodeFilter.FILTER_REJECT;
-                            // 检查可见性
-                            const style = window.getComputedStyle(parent);
-                            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
+                            // 排除侧边栏、导航栏、logo、品牌区
+                            if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="logo"], [class*="brand"]'))
                                 return NodeFilter.FILTER_REJECT;
                             const t = node.textContent.trim();
                             if (t.length < 3) return NodeFilter.FILTER_REJECT;
@@ -872,10 +1045,11 @@ class DoubaoWebChatClient(WebChatClientBase):
             return 0
 
     async def _extract_response(self, page: Page) -> str:
-        """提取豆包响应文本，包括引用链接
+        """提取豆包响应文本，包括引用链接和搜索元数据
 
         优先用 RESPONSE_SELECTOR 定位响应区域提取文本和链接，
-        回退到 TreeWalker 提取可见文本（兼容旧版页面）。
+        回退到 TreeWalker 提取可见文本。
+        同时提取搜索元数据（关键词数、参考资料数）。
         """
         text = ""
         links = []
@@ -923,7 +1097,7 @@ class DoubaoWebChatClient(WebChatClientBase):
                             const parent = node.parentElement;
                             if (!parent) return NodeFilter.FILTER_REJECT;
                             if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
-                            if (parent.closest('[class*="input"], [class*="send"], [class*="nav"], [class*="sidebar"], [class*="header"], [class*="logo"], [class*="brand"]'))
+                            if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="logo"], [class*="brand"]'))
                                 return NodeFilter.FILTER_REJECT;
                             const style = window.getComputedStyle(parent);
                             if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
@@ -942,7 +1116,29 @@ class DoubaoWebChatClient(WebChatClientBase):
             if text:
                 logger.info(f"WebChat doubao: extracted {len(text)} chars via TreeWalker fallback, {len(links)} links")
 
-        # 3) 将链接追加到文本末尾（与其他客户端一致：Kimi/Qwen/DeepSeek/Ernie）
+        # 3) 提取搜索元数据（关键词数、参考资料数）
+        try:
+            search_meta = await page.evaluate("""() => {
+                const allText = document.body.innerText || '';
+                const meta = { keyword_count: null, reference_count: null };
+                const kwMatch = allText.match(/搜索\\s*(\\d+)\\s*个?关键词/);
+                if (kwMatch) meta.keyword_count = parseInt(kwMatch[1]);
+                const refMatch = allText.match(/参考\\s*(?:了)?\\s*(\\d+)\\s*篇\\s*(?:资料|来源|文献|文章)/);
+                if (refMatch) meta.reference_count = parseInt(refMatch[1]);
+                return meta;
+            }""")
+            if search_meta and (search_meta.get("keyword_count") or search_meta.get("reference_count")):
+                meta_parts = []
+                if search_meta.get("keyword_count"):
+                    meta_parts.append(f"搜索关键词: {search_meta['keyword_count']}个")
+                if search_meta.get("reference_count"):
+                    meta_parts.append(f"参考资料: {search_meta['reference_count']}篇")
+                text = text + "\n\n---\n[搜索元数据]\n" + "\n".join(meta_parts)
+                logger.info(f"WebChat doubao: search_meta kw={search_meta.get('keyword_count')} ref={search_meta.get('reference_count')}")
+        except Exception:
+            pass
+
+        # 4) 将链接追加到文本末尾
         if links:
             citation_lines = []
             for i, link in enumerate(links):
@@ -951,12 +1147,15 @@ class DoubaoWebChatClient(WebChatClientBase):
                     continue
                 if "doubao.com" in href and "/chat" in href:
                     continue
+                if "bytedance.com" in href:
+                    continue
                 link_text = link.get("text") or f"[{i+1}]"
                 citation_lines.append(f"[{i+1}] {link_text}: {href}")
 
             if citation_lines:
                 text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
 
+        return text or ""
         return text or ""
 
     async def _start_new_chat(self, page: Page):

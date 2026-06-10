@@ -192,7 +192,9 @@ async def import_local_results(
             for mk, scores_by_cat in geo_scores_data.items():
                 model_name = analysis_results[mk][0].get("model_name", mk) if analysis_results.get(mk) else mk
                 for cat, scores in scores_by_cat.items():
-                    # cat 为 None 表示全局评分
+                    # cat 为 None / 字符串 "null" / "__GLOBAL__" 表示全局评分
+                    if cat is None or cat == "null" or cat == "__GLOBAL__":
+                        cat = None
                     await db.save_geo_scores(run_id, mk, model_name, cat, scores)
             geo_scores_saved = True
             logger.info(f"导入 geo_scores 成功 (从 JSON)")

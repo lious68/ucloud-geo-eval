@@ -304,6 +304,16 @@ async def run_local_eval(
 
     # 5. 导出结果
     print("\n[5/5] 导出结果...")
+
+    # 修复 geo_scores 中的 None 键（JSON 序列化时会变成字符串 "null"）
+    fixed_geo_scores = {}
+    for mk, scores_by_cat in geo_scores.items():
+        fixed_geo_scores[mk] = {}
+        for cat, scores in scores_by_cat.items():
+            # 使用特殊标记，导入时再转回 None
+            cat_key = cat if cat is not None else "__GLOBAL__"
+            fixed_geo_scores[mk][cat_key] = scores
+
     output = {
         "meta": {
             "generated_at": datetime.now().isoformat(),
@@ -314,7 +324,7 @@ async def run_local_eval(
         },
         "questions": questions,
         "analysis_results": {mk: all_results[mk] for mk in model_keys},
-        "geo_scores": geo_scores,
+        "geo_scores": fixed_geo_scores,
     }
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)

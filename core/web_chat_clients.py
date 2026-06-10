@@ -280,7 +280,8 @@ class KimiWebChatClient(WebChatClientBase):
     async def _type_question(self, page: Page, question: str):
         """在输入框中输入问题（Kimi 用 contenteditable div）
 
-        用 JS 直接设置文本，比 keyboard.type 快得多，不会超时。
+        使用 Playwright 物理键盘输入，比 JS 设置 textContent 更可靠。
+        Kimi 的编辑器是 React-based，不响应直接 DOM 修改。
         """
         # 找到输入框
         input_box = None
@@ -298,7 +299,7 @@ class KimiWebChatClient(WebChatClientBase):
                 continue
 
         if not input_box:
-            await page.screenshot(path="output/kimi_input_debug.png", full_page=True)
+            await page.screenshot(path="output/kimi_input_debug.png", full_mode=True)
             logger.warning("WebChat kimi: 找不到输入框，已截图到 output/kimi_input_debug.png")
             raise RuntimeError("Kimi 输入框未找到")
 
@@ -306,20 +307,20 @@ class KimiWebChatClient(WebChatClientBase):
         await input_box.click()
         await asyncio.sleep(0.3)
 
-        # 用 JS 直接设置文本（比 keyboard.type 快得多，不会超时）
-        await page.evaluate("""(text) => {
+        # 物理键盘输入（Kimi React 编辑器只响应真实键盘事件）
+        # 15ms/char 是经验值：50 字约 0.75s，不会超时
+        await page.keyboard.type(question, delay=15)
+        await asyncio.sleep(0.3)
+
+        # 验证输入是否成功
+        typed = await page.evaluate("""() => {
             const el = document.querySelector('[contenteditable="true"]');
-            if (el) {
-                el.textContent = text;
-                el.focus();
-                // 触发 React 兼容的输入事件
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                el.dispatchEvent(new CompositionEvent('compositionend', { data: text }));
-            }
-        }""", question)
-        await asyncio.sleep(0.5)
-        logger.info(f"WebChat kimi: question typed via JS ({len(question)} chars)")
+            return el ? el.textContent : '';
+        }""")
+        if typed and len(typed) > len(question) * 0.5:
+            logger.info(f"WebChat kimi: question typed via keyboard ({len(typed)} chars)")
+        else:
+            logger.warning(f"WebChat kimi: typing may have failed (expected {len(question)}, got {len(typed)})")
 
     async def _send_question(self, page: Page):
         """发送问题"""
@@ -443,7 +444,7 @@ class KimiWebChatClient(WebChatClientBase):
 
         策略：
         1. 尝试用 segment-assistant 选择器提取
-        2. 回退：空间分析 — 只取页面右半屏（主聊天区），排除左侧边栏/footer
+        2. 回退：TreeWalker 提取整个页面，排除侧边栏/footer/输入区
         """
         # 先尝试用 CSS 选择器提取
         try:
@@ -456,99 +457,97 @@ class KimiWebChatClient(WebChatClientBase):
                 if citations:
                     text += "\n\n---\n引用来源:\n" + "\n".join(citations)
 
-                logger.info(f"WebChat kimi: extracted {len(text)} chars via segment-assistant")
+                logger.info("WebChat kimi: extracted %d chars via segment-assistant", len(text))
                 return text
         except Exception:
             pass
 
-        # 回退：空间分析提取 — 只取主聊天区域（右半屏），排除侧边栏
-        text, citations = await page.evaluate("""() => {
-            const bodyW = document.body.scrollWidth;
-            const sidebarRight = bodyW * 0.28;  // 侧边栏约占28%宽度
+        # 回退：用 TreeWalker 提取全页面文本，排除侧边栏/footer/输入区
+        result = await page.evaluate("""() => {
+            var bodyW = document.body.scrollWidth;
+            var sidebarRight = bodyW * 0.3;
+            var exclude = 'input,textarea,button,[role="navigation"],[role="menubar"],header,footer,script,style,noscript,link,meta';
+            var sidebarCls = 'sidebar,left-side,leftpanel,logo,brand,nav';
 
-            // 策略：找主聊天区域内的助手消息元素
-            // 先找最大的内容容器（通常是聊天消息列表）
-            let bestContainer = null;
-            let bestScore = 0;
-
-            const allDivs = document.querySelectorAll('div, article, main, section');
-            for (const el of allDivs) {
-                const r = el.getBoundingClientRect();
-                // 必须在右半屏
-                if (r.x < sidebarRight) continue;
-                if (r.width < bodyW * 0.4) continue;  // 至少占右半屏大部分宽度
-                const text = (el.innerText || '').trim();
-                if (text.length < 100) continue;
-                // 评分：文本长度 + 位置居中
-                const centerX = r.x + r.width / 2;
-                const centerScore = 1 - Math.abs(centerX - bodyW * 0.6) / (bodyW * 0.4);
-                const score = text.length * Math.max(0, centerScore);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestContainer = el;
+            var texts = [];
+            var links = [];
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+                acceptNode: function(node) {
+                    var tag = node.tagName.toLowerCase();
+                    if (tag === 'script' || tag === 'style' || tag === 'noscript' ||
+                        tag === 'link' || tag === 'meta' || tag === 'header' || tag === 'footer')
+                        return NodeFilter.FILTER_REJECT;
+                    return NodeFilter.FILTER_ACCEPT;
                 }
-            }
+            });
 
-            if (!bestContainer) {
-                // 再宽松一点：只要右半屏有大文本的容器
-                for (const el of allDivs) {
-                    const r = el.getBoundingClientRect();
-                    if (r.x < sidebarRight * 0.8) continue;  // 排除最左侧
-                    const text = (el.innerText || '').trim();
-                    if (text.length > 200 && el.children.length > 2) {
-                        bestContainer = el;
-                        break;
+            var node;
+            while (node = walker.nextNode()) {
+                // 只取文本节点
+                var children = node.childNodes;
+                for (var i = 0; i < children.length; i++) {
+                    if (children[i].nodeType === Node.TEXT_NODE) {
+                        var t = children[i].textContent.trim();
+                        if (t.length >= 3) {
+                            texts.push(t);
+                        }
+                    }
+                }
+                // 收集链接
+                if (node.tagName === 'A' && node.href) {
+                    var hr = node.href;
+                    if (!hr.startsWith('javascript:') && !hr.startsWith('#') &&
+                        !hr.includes('kimi.com')) {
+                        links.push({text: (node.textContent || '').trim(), href: hr});
                     }
                 }
             }
 
-            const container = bestContainer || document.body;
-            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
-
-            const texts = [];
-            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-                acceptNode: (node) => {
-                    const parent = node.parentElement;
-                    if (!parent) return NodeFilter.FILTER_REJECT;
-                    if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
-                    if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="leftPanel"], [class*="logo"], [class*="brand"], footer'))
-                        return NodeFilter.FILTER_REJECT;
-                    const t = node.textContent.trim();
+            // 进一步过滤：排除左屏内容（侧边栏）
+            var rightTexts = [];
+            walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+                acceptNode: function(n) {
+                    var p = n.parentElement;
+                    if (!p) return NodeFilter.FILTER_REJECT;
+                    if (p.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                    var r = n.parentElement.getBoundingClientRect();
+                    if (r.x < sidebarRight) return NodeFilter.FILTER_REJECT;
+                    var t = n.textContent.trim();
                     if (t.length < 3) return NodeFilter.FILTER_REJECT;
                     return NodeFilter.FILTER_ACCEPT;
                 }
             });
-            let n;
-            while (n = walker.nextNode()) texts.push(n.textContent.trim());
+            while (node = walker.nextNode()) {
+                rightTexts.push(node.textContent.trim());
+            }
 
-            // 提取链接
-            const citationLines = [];
-            const allLinks = container.querySelectorAll('a[href]');
-            let idx = 1;
-            allLinks.forEach(a => {
-                const href = a.href || '';
-                if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
-                if (href.includes('kimi.com') && !href.includes('/search')) return;  // 排除 kimi 内部链接
-                const linkText = (a.textContent || '').trim() || `[${idx}]`;
-                citationLines.push(`[${idx}] ${linkText}: ${href}`);
-                idx++;
-            });
-
-            // 去重
-            const seen = new Set();
-            const uniqueCitations = citationLines.filter(c => {
-                if (seen.has(c)) return false;
-                seen.add(c);
-                return true;
-            });
-
-            return { text: texts.join('\n').trim(), citations: uniqueCitations.slice(0, 20) };
+            return {text: rightTexts.join('\n').trim(), linkCount: links.length};
         }""")
 
-        if citations:
-            text += "\n\n---\n引用来源:\n" + "\n".join(citations)
+        text = result.get("text", "")
 
-        logger.info(f"WebChat kimi: extracted {len(text)} chars via spatial fallback")
+        # 提取外部链接（从主内容区域）
+        links = await page.evaluate("""() => {
+            var links = [];
+            var allA = document.querySelectorAll('a[href]');
+            for (var i = 0; i < allA.length; i++) {
+                var a = allA[i];
+                var hr = a.href || '';
+                if (!hr || hr.startsWith('javascript:') || hr.startsWith('#')) continue;
+                if (hr.includes('kimi.com')) continue;
+                links.push({text: (a.textContent || '').trim() || ('[' + (links.length+1) + ']'), href: hr});
+            }
+            return links;
+        }""")
+
+        if links:
+            citation_lines = []
+            for i, link in enumerate(links):
+                link_text = link.get("text", "") or "[" + str(i+1) + "]"
+                citation_lines.append("[" + str(i+1) + "] " + link_text + ": " + link["href"])
+            text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+
+        logger.info("WebChat kimi: extracted %d chars via TreeWalker fallback", len(text))
         return text or ""
 
     async def _extract_links_from_area(self, response_area) -> list:

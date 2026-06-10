@@ -11,7 +11,7 @@
             <el-option v-for="t in typeList" :key="t" :label="t" :value="t" />
           </el-select>
         </div>
-        <el-button type="primary" @click="showAddDialog = true"><el-icon><Plus /></el-icon> 新增问题</el-button>
+        <el-button type="primary" @click="openAddDialog"><el-icon><Plus /></el-icon> 新增问题</el-button>
       </div>
 
       <el-table :data="filteredQuestions" stripe max-height="600">
@@ -24,32 +24,33 @@
             <el-tag :type="row.difficulty==='easy'?'success':row.difficulty==='hard'?'danger':'info'" size="small">{{ row.difficulty }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120">
+        <el-table-column label="操作" width="140">
           <template #default="{ row }">
+            <el-button type="primary" size="small" link @click="editQ(row)">编辑</el-button>
             <el-button type="danger" size="small" link @click="deleteQ(row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <!-- 新增对话框 -->
-    <el-dialog v-model="showAddDialog" title="新增问题" width="500px">
-      <el-form :model="newQ" label-width="80px">
-        <el-form-item label="ID"><el-input v-model="newQ.id" placeholder="如 custom_01" /></el-form-item>
-        <el-form-item label="品类"><el-input v-model="newQ.category" placeholder="如 云计算" /></el-form-item>
+    <!-- 新增/编辑对话框 -->
+    <el-dialog v-model="showDialog" :title="editingQ ? '编辑问题' : '新增问题'" width="500px" @close="resetForm">
+      <el-form :model="formQ" label-width="80px">
+        <el-form-item label="ID"><el-input v-model="formQ.id" placeholder="如 custom_01" :disabled="!!editingQ" /></el-form-item>
+        <el-form-item label="品类"><el-input v-model="formQ.category" placeholder="如 云计算" /></el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="newQ.question_type">
+          <el-select v-model="formQ.question_type">
             <el-option label="品牌词" value="品牌词" />
             <el-option label="品类词" value="品类词" />
             <el-option label="对比词" value="对比词" />
             <el-option label="场景词" value="场景词" />
           </el-select>
         </el-form-item>
-        <el-form-item label="问题"><el-input v-model="newQ.question" type="textarea" :rows="2" /></el-form-item>
+        <el-form-item label="问题"><el-input v-model="formQ.question" type="textarea" :rows="2" /></el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showAddDialog = false">取消</el-button>
-        <el-button type="primary" @click="addQuestion">添加</el-button>
+        <el-button @click="showDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitQ">{{ editingQ ? '保存' : '添加' }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -63,8 +64,10 @@ import { apiFetch } from '../composables/useWebSocket'
 const questions = ref([])
 const filterCategory = ref('')
 const filterType = ref('')
-const showAddDialog = ref(false)
-const newQ = ref({ id: '', category: '', question_type: '品类词', question: '', tags: [], difficulty: 'medium' })
+const showDialog = ref(false)
+const editingQ = ref(null)
+const defaultForm = { id: '', category: '', question_type: '品类词', question: '', tags: [], difficulty: 'medium' }
+const formQ = ref({ ...defaultForm })
 
 const categoryList = computed(() => [...new Set(questions.value.map(q => q.category))])
 const typeList = computed(() => [...new Set(questions.value.map(q => q.question_type))])
@@ -76,20 +79,45 @@ const filteredQuestions = computed(() => {
   })
 })
 
+function openAddDialog() {
+  editingQ.value = null
+  formQ.value = { ...defaultForm }
+  showDialog.value = true
+}
+
+function editQ(row) {
+  editingQ.value = row
+  formQ.value = { id: row.id, category: row.category, question_type: row.question_type, question: row.question, tags: row.tags || [], difficulty: row.difficulty || 'medium' }
+  showDialog.value = true
+}
+
+function resetForm() {
+  editingQ.value = null
+  formQ.value = { ...defaultForm }
+}
+
+async function submitQ() {
+  try {
+    if (editingQ.value) {
+      await apiFetch(`/questions/${editingQ.value.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ category: formQ.value.category, question_type: formQ.value.question_type, question: formQ.value.question })
+      })
+      ElMessage.success('保存成功')
+    } else {
+      await apiFetch('/questions', { method: 'POST', body: JSON.stringify(formQ.value) })
+      ElMessage.success('添加成功')
+    }
+    showDialog.value = false
+    await loadQuestions()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
 async function loadQuestions() {
   try {
     const res = await apiFetch('/questions')
     questions.value = res.data || []
   } catch (e) { console.error(e) }
-}
-
-async function addQuestion() {
-  try {
-    await apiFetch('/questions', { method: 'POST', body: JSON.stringify(newQ.value) })
-    ElMessage.success('添加成功')
-    showAddDialog.value = false
-    await loadQuestions()
-  } catch (e) { ElMessage.error(e.message) }
 }
 
 async function deleteQ(id) {

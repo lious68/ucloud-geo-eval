@@ -442,8 +442,8 @@ class KimiWebChatClient(WebChatClientBase):
         """提取 Kimi 响应文本，包括引用链接
 
         策略：
-        1. 尝试用 segment-assistant 选择器提取（如果仍然有效）
-        2. 回退：用 JS 提取聊天区域可见文本（TreeWalker 方式）
+        1. 尝试用 segment-assistant 选择器提取
+        2. 回退：空间分析 — 只取页面右半屏（主聊天区），排除左侧边栏/footer
         """
         # 先尝试用 CSS 选择器提取
         try:
@@ -452,91 +452,128 @@ class KimiWebChatClient(WebChatClientBase):
             text = await response_area.inner_text()
 
             if len(text) > 50:
-                # 提取链接
-                links = await response_area.evaluate("""
-                    el => {
-                        const links = el.querySelectorAll('a[href]');
-                        return Array.from(links).map(a => ({
-                            text: a.textContent.trim(),
-                            href: a.href
-                        }));
-                    }
-                """)
-                if links:
-                    citation_lines = []
-                    for i, link in enumerate(links):
-                        href = link["href"]
-                        if href.startswith("javascript:") or href.startswith("#"):
-                            continue
-                        if "kimi.com" in href and "/chat" in href:
-                            continue
-                        link_text = link["text"] or f"[{i+1}]"
-                        citation_lines.append(f"[{i+1}] {link_text}: {href}")
-                    if citation_lines:
-                        text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
+                citations = await self._extract_links_from_area(response_area)
+                if citations:
+                    text += "\n\n---\n引用来源:\n" + "\n".join(citations)
 
                 logger.info(f"WebChat kimi: extracted {len(text)} chars via segment-assistant")
                 return text
         except Exception:
             pass
 
-        # 回退：用 JS 提取聊天区域可见文本
-        text = await page.evaluate("""() => {
-            // 先尝试定位聊天内容区域
-            const chatArea = document.querySelector(
-                '.chat-content, .conversation, [class*="chat-content"], [class*="conversation"], main'
-            ) || document.body;
+        # 回退：空间分析提取 — 只取主聊天区域（右半屏），排除侧边栏
+        text, citations = await page.evaluate("""() => {
+            const bodyW = document.body.scrollWidth;
+            const sidebarRight = bodyW * 0.28;  // 侧边栏约占28%宽度
 
-            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
-            const walker = document.createTreeWalker(
-                chatArea,
-                NodeFilter.SHOW_TEXT,
-                {
-                    acceptNode: (node) => {
-                        const parent = node.parentElement;
-                        if (!parent) return NodeFilter.FILTER_REJECT;
-                        if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
-                        if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="logo"], [class*="brand"]'))
-                            return NodeFilter.FILTER_REJECT;
-                        const t = node.textContent.trim();
-                        if (t.length < 3) return NodeFilter.FILTER_REJECT;
-                        return NodeFilter.FILTER_ACCEPT;
+            // 策略：找主聊天区域内的助手消息元素
+            // 先找最大的内容容器（通常是聊天消息列表）
+            let bestContainer = null;
+            let bestScore = 0;
+
+            const allDivs = document.querySelectorAll('div, article, main, section');
+            for (const el of allDivs) {
+                const r = el.getBoundingClientRect();
+                // 必须在右半屏
+                if (r.x < sidebarRight) continue;
+                if (r.width < bodyW * 0.4) continue;  // 至少占右半屏大部分宽度
+                const text = (el.innerText || '').trim();
+                if (text.length < 100) continue;
+                // 评分：文本长度 + 位置居中
+                const centerX = r.x + r.width / 2;
+                const centerScore = 1 - Math.abs(centerX - bodyW * 0.6) / (bodyW * 0.4);
+                const score = text.length * Math.max(0, centerScore);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestContainer = el;
+                }
+            }
+
+            if (!bestContainer) {
+                // 再宽松一点：只要右半屏有大文本的容器
+                for (const el of allDivs) {
+                    const r = el.getBoundingClientRect();
+                    if (r.x < sidebarRight * 0.8) continue;  // 排除最左侧
+                    const text = (el.innerText || '').trim();
+                    if (text.length > 200 && el.children.length > 2) {
+                        bestContainer = el;
+                        break;
                     }
                 }
-            );
+            }
+
+            const container = bestContainer || document.body;
+            const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
+
             const texts = [];
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+                acceptNode: (node) => {
+                    const parent = node.parentElement;
+                    if (!parent) return NodeFilter.FILTER_REJECT;
+                    if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
+                    if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="leftPanel"], [class*="logo"], [class*="brand"], footer'))
+                        return NodeFilter.FILTER_REJECT;
+                    const t = node.textContent.trim();
+                    if (t.length < 3) return NodeFilter.FILTER_REJECT;
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            });
             let n;
             while (n = walker.nextNode()) texts.push(n.textContent.trim());
-            return texts.join('\\n').trim();
+
+            // 提取链接
+            const citationLines = [];
+            const allLinks = container.querySelectorAll('a[href]');
+            let idx = 1;
+            allLinks.forEach(a => {
+                const href = a.href || '';
+                if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
+                if (href.includes('kimi.com') && !href.includes('/search')) return;  // 排除 kimi 内部链接
+                const linkText = (a.textContent || '').trim() || `[${idx}]`;
+                citationLines.push(`[${idx}] ${linkText}: ${href}`);
+                idx++;
+            });
+
+            // 去重
+            const seen = new Set();
+            const uniqueCitations = citationLines.filter(c => {
+                if (seen.has(c)) return false;
+                seen.add(c);
+                return true;
+            });
+
+            return { text: texts.join('\n').trim(), citations: uniqueCitations.slice(0, 20) };
         }""")
 
-        # 提取所有外部链接
-        links = await page.evaluate("""() => {
-            const chatArea = document.querySelector(
-                '.chat-content, .conversation, [class*="chat-content"], [class*="conversation"], main'
-            ) || document.body;
-            const allLinks = chatArea.querySelectorAll('a[href]');
-            return Array.from(allLinks).map(a => ({
-                text: a.textContent.trim(),
-                href: a.href
-            }));
-        }""")
+        if citations:
+            text += "\n\n---\n引用来源:\n" + "\n".join(citations)
 
-        if links:
-            citation_lines = []
-            for i, link in enumerate(links):
-                href = link["href"]
-                if href.startswith("javascript:") or href.startswith("#"):
-                    continue
-                if "kimi.com" in href and "/chat" in href:
-                    continue
-                link_text = link["text"] or f"[{i+1}]"
-                citation_lines.append(f"[{i+1}] {link_text}: {href}")
-            if citation_lines:
-                text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
-
-        logger.info(f"WebChat kimi: extracted {len(text)} chars via fallback text extraction")
+        logger.info(f"WebChat kimi: extracted {len(text)} chars via spatial fallback")
         return text or ""
+
+    async def _extract_links_from_area(self, response_area) -> list:
+        """从响应区域提取外部引用链接"""
+        links = await response_area.evaluate("""
+            el => {
+                const links = el.querySelectorAll('a[href]');
+                return Array.from(links).map(a => ({
+                    text: a.textContent.trim(),
+                    href: a.href
+                }));
+            }
+        """)
+        citation_lines = []
+        idx = 1
+        for link in links:
+            href = link["href"]
+            if href.startswith("javascript:") or href.startswith("#"):
+                continue
+            if "kimi.com" in href and "/search" not in href:
+                continue
+            link_text = link["text"] or f"[{idx}]"
+            citation_lines.append(f"[{idx}] {link_text}: {href}")
+            idx += 1
+        return citation_lines
 
     async def _start_new_chat(self, page: Page):
         """开始新对话"""

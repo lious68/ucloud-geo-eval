@@ -235,20 +235,18 @@ class GEOEvaluator:
 
         comparisons = self.calculator.compare_models(self.all_results)
 
-        print(f"\n{'排名':<6}{'模型':<12}{'GEO得分':<10}{'覆盖率':<10}{'提及率':<10}"
-              f"{'引用率':<10}{'推荐率':<10}{'情感值':<10}{'平均排名':<10}")
-        print("-" * 86)
+        print(f"\n{'排名':<6}{'模型':<12}{'GEO得分':<10}{'提及率':<10}"
+              f"{'引用率':<10}{'TOP3推荐率':<12}{'情感值':<10}")
+        print("-" * 70)
 
         for i, comp in enumerate(comparisons, 1):
             badge = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f" #{i}")
             s = comp.scores
             print(f"{badge:<6}{comp.model_name:<12}{s.geo_score:<10.1f}"
                   f"{s.coverage_rate*100:<9.1f}%"
-                  f"{s.mention_rate:<10.2f}"
                   f"{s.citation_rate*100:<9.1f}%"
-                  f"{s.recommendation_rate*100:<9.1f}%"
-                  f"{s.sentiment_score:<10.2f}"
-                  f"{s.avg_rank:<10.1f}")
+                  f"{s.recommendation_rate*100:<11.1f}%"
+                  f"{s.sentiment_score:<10.2f}")
 
         # 各模型评分卡
         for comp in comparisons:
@@ -257,8 +255,9 @@ class GEOEvaluator:
             print(f"📊 {comp.model_name} 评分卡")
             print(f"{'─'*40}")
             print(f"  GEO综合得分: {scorecard['GEO综合得分']}")
-            print(f"  覆盖率: {scorecard['覆盖率']['百分比']} - {scorecard['覆盖率']['说明']}")
-            print(f"  推荐率: {scorecard['推荐率']['百分比']} (强推荐: {scorecard['推荐率']['强推荐率']})")
+            print(f"  提及率: {scorecard['覆盖率']['百分比']} - {scorecard['覆盖率']['说明']}")
+            print(f"  引用率: {scorecard['引用率']['百分比']}")
+            print(f"  TOP3推荐率: {scorecard['推荐率']['百分比']}")
             print(f"  情感值: {scorecard['情感值']['值']} ({scorecard['情感值']['标签']})")
 
     def _save_raw_response(self, model_key: str, question_id: str, response: Dict):

@@ -310,9 +310,10 @@ async def run_local_eval(
         geo_scores[mk] = {None: _scores_to_dict(scores)}
 
         print(f"  {model_name}: GEO={scores.geo_score:.1f} "
-              f"覆盖={scores.coverage_rate:.2f} "
-              f"引用={scores.citation_rate:.2f} "
-              f"推荐={scores.recommendation_rate:.2f}")
+              f"提及率={scores.coverage_rate:.2f} "
+              f"引用率={scores.citation_rate:.2f} "
+              f"TOP3推荐率={scores.recommendation_rate:.2f} "
+              f"情感值={scores.sentiment_score:.2f}")
 
         # 按品类计算
         categories_map = {}

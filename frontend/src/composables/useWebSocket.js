@@ -55,6 +55,19 @@ export async function apiFetch(path, options = {}) {
     throw new Error('登录已过期')
   }
 
-  if (!res.ok) throw new Error(`API Error: ${res.status}`)
+  if (res.status === 413) {
+    throw new Error('文件过大，请缩减后重试（上限 50MB）')
+  }
+
+  if (!res.ok) {
+    // 尝试从响应中提取错误信息，避免解析 HTML 报错
+    try {
+      const errData = await res.json()
+      throw new Error(errData.detail || errData.message || `请求失败 (${res.status})`)
+    } catch {
+      throw new Error(`请求失败 (${res.status})`)
+    }
+  }
+
   return res.json()
 }

@@ -11,8 +11,8 @@
 
         <el-form-item label="评测模式">
           <el-radio-group v-model="form.mode" @change="onModeChange">
-            <el-radio value="api">API 模式（通过各模型API调用）</el-radio>
             <el-radio value="webchat">🌐 WebChat 模式（浏览器自动化）</el-radio>
+            <el-radio value="api">API 模式（通过各模型API调用）</el-radio>
           </el-radio-group>
           <el-alert v-if="form.mode === 'api'" type="info" :closable="false" style="margin-top:8px">
             API 模式通过各模型的API接口提问，支持开启联网搜索（见下方开关）。DeepSeek 官方 API 无内置联网，需额外配置外部搜索服务。
@@ -251,7 +251,7 @@ const form = ref({
   model_keys: [],
   categories: [],
   delay: 1.0,
-  mode: 'api',
+  mode: 'webchat',
   enable_search: false,
 })
 
@@ -449,15 +449,12 @@ async function uploadResults() {
     const formData = new FormData()
     formData.append('file', selectedFile.value)
 
-    const response = await fetch('/api/evaluations/import-results', {
+    const result = await apiFetch('/evaluations/import-results', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('geo_auth_token') || ''}` },
       body: formData,
     })
 
-    const result = await response.json()
-
-    if (!response.ok || !result.success) {
+    if (!result.success) {
       throw new Error(result.detail || result.message || '上传失败')
     }
 

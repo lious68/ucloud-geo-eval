@@ -12,6 +12,15 @@ import sys
 import os
 import json
 
+# Windows 控制台 UTF-8 支持
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # 添加项目路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
@@ -65,8 +74,19 @@ async def setup_auth(model_key: str):
     print(f"  ✅ 浏览器已打开 {site['url']}")
     print(f"  请确认登录状态是否有效（如已登录可直接按 Enter；如未登录请先登录）")
 
-    # 等待用户输入
-    input("\n  确认登录有效后，请按 Enter 键保存状态...")
+    # 等待用户确认：支持交互式 input 或创建信号文件
+    signal_file = os.path.join(os.path.dirname(__file__), ".webchat_done")
+    print(f"\n  确认登录有效后，请按 Enter 键保存状态...")
+    print(f"  （或在项目 scripts/ 目录下创建 .webchat_done 文件）")
+    try:
+        input()
+    except EOFError:
+        # 非交互式环境，等待信号文件
+        print(f"  非交互式环境，等待信号文件: {signal_file}")
+        while not os.path.exists(signal_file):
+            await asyncio.sleep(1)
+        os.remove(signal_file)
+        print(f"  ✅ 检测到确认信号")
 
     # 保存认证状态
     ensure_auth_dir()

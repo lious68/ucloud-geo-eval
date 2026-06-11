@@ -15,6 +15,12 @@ THIRD_PARTY_CITATION_DOMAINS = [
     "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
     "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
     "mp.weixin.qq.com",
+    # 补充常见中文技术/资讯社区
+    "jianshu.com", "oscimg.com", "weibo.com", "36kr.com",
+    "stackoverflow.com", "gitee.com", "readthedocs.io",
+    "tianyancha.com", "qcc.com",
+    # 自媒体平台（头条/百家号/搜狐号/网易号）
+    "toutiao.com", "baijiahao.baidu.com", "sohu.com", "163.com",
 ]
 
 
@@ -102,7 +108,8 @@ class ResponseAnalyzer:
         self.score_config = SCORE_CONFIG
 
     def analyze(self, question_id: str, model_key: str, model_name: str,
-                content: str, error: str = None) -> AnalysisResult:
+                content: str, error: str = None,
+                search_results: list = None) -> AnalysisResult:
         """分析单条模型响应"""
         result = AnalysisResult(
             question_id=question_id,
@@ -126,6 +133,10 @@ class ResponseAnalyzer:
 
         # 3. 检测引用
         self._detect_citations(content, result)
+
+        # 3.5 合并 API 返回的联网搜索引用来源
+        if search_results:
+            self._incorporate_search_results(content, result, search_results)
 
         # 4. 检测推荐
         self._detect_recommendations(content, result)
@@ -220,18 +231,24 @@ class ResponseAnalyzer:
 
     def _detect_citations(self, content: str, result: AnalysisResult):
         """检测引用（URL链接和参考引用）"""
-        # 1. 检测UCloud相关URL
-        for pattern_str in self.score_config["citation"]["url_patterns"]:
-            pattern = re.compile(pattern_str)
-            for match in pattern.finditer(content):
-                pos = match.start()
-                url = match.group()
-                from config import resolve_channel
+        from config import resolve_channel
+
+        # 先用通用正则提取所有 URL，以获取完整路径（避免 url_patterns 截断 URL）
+        url_pattern = re.compile(r'https?://[^\s<>"\')\]，。、；：！？】}]+')
+        content_urls = {}  # pos -> full_url
+        for match in url_pattern.finditer(content):
+            pos = match.start()
+            full_url = match.group().rstrip(".,;:!?)]}>》）】")
+            content_urls[pos] = full_url
+
+        # 1. 检测UCloud相关URL（使用完整URL，而非 url_patterns 截断的短匹配）
+        for pos, full_url in content_urls.items():
+            if any(re.search(p, full_url) for p in self.score_config["citation"]["url_patterns"]):
                 result.citations.append(CitationInfo(
                     citation_type="url",
-                    content=url,
+                    content=full_url,
                     position=pos,
-                    source_channel=resolve_channel(url),
+                    source_channel=resolve_channel(full_url),
                     is_ucloud=True,
                 ))
 
@@ -503,3 +520,89 @@ class ResponseAnalyzer:
                 source_channel=channel,
                 is_ucloud=is_uc,
             ))
+
+    def _incorporate_search_results(self, content: str, result: AnalysisResult,
+                                     search_results: list):
+        """将 API 返回的联网搜索引用来源合并到引用列表
+
+        各模型 API 返回的 search_results 包含搜索引用的 URL、标题等元数据，
+        这些 URL 可能不在模型回复正文中直接出现，但属于模型的引用来源。
+        将其补充到 all_cited_urls 和 citations 中（去重）。
+
+        search_results 格式:
+            [{"index": int, "title": str, "url": str, "site_name": str}, ...]
+        """
+        from config import resolve_channel
+        from urllib.parse import urlparse
+
+        def _url_base(u):
+            """提取 URL 的 scheme+netloc+path（去掉 query/fragment 和尾部斜杠）用于去重"""
+            u = u.lower().rstrip("/")
+            try:
+                p = urlparse(u)
+                base = f"{p.scheme}://{p.netloc}{p.path}".rstrip("/")
+                return base
+            except Exception:
+                return u
+
+        # 正文和已有引用中出现的 URL（用 base 形式去重）
+        content_urls_in_text = set()
+        for c in result.all_cited_urls:
+            content_urls_in_text.add(_url_base(c.content))
+        for c in result.citations:
+            if c.citation_type == "url":
+                content_urls_in_text.add(_url_base(c.content))
+
+        for i, sr in enumerate(search_results):
+            url = sr.get("url", "")
+            if not url:
+                continue
+
+            url_base = _url_base(url)
+            # 去重：如果正文已包含该 URL（路径级别匹配），跳过
+            if url_base in content_urls_in_text:
+                continue
+
+            channel = resolve_channel(url)
+            is_uc = channel.startswith("UCloud") or "ucloud" in url.lower()
+
+            # 使用负数 position 标记为 API 搜索引用（非正文位置）
+            # 按顺序递减，确保唯一性
+            position = -(i + 1) * 10
+
+            citation = CitationInfo(
+                citation_type="url",
+                content=url,
+                position=position,
+                source_channel=channel,
+                is_ucloud=is_uc,
+            )
+
+            # 添加到 all_cited_urls
+            result.all_cited_urls.append(citation)
+
+            # API 搜索引用：这些 URL 是模型联网搜索时返回的来源，
+            # 与回答内容直接相关，无需额外判断 ucloud_mentioned 或上下文。
+            if is_uc:
+                result.citations.append(CitationInfo(
+                    citation_type="url",
+                    content=url,
+                    position=position,
+                    source_channel=channel,
+                    is_ucloud=True,
+                ))
+            else:
+                result.citations.append(CitationInfo(
+                    citation_type="url",
+                    content=url,
+                    position=position,
+                    source_channel=channel,
+                    is_ucloud=False,
+                ))
+
+            # 注册到去重集合，防止后续搜索结果重复
+            content_urls_in_text.add(url_base)
+
+        # 更新引用统计
+        result.has_citation = len(result.citations) > 0
+        result.citation_count = len(result.citations)

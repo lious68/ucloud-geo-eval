@@ -268,13 +268,14 @@ async def _run_evaluation(
                         # 发送请求（传递 enable_search 参数）
                         response = client.chat(q["question"], enable_search=enable_search)
 
-                        # 分析响应
+                        # 分析响应（传递 search_results 以合并 API 返回的引用来源）
                         analysis = analyzer.analyze(
                             question_id=q["id"],
                             model_key=mk,
                             model_name=client.name,
                             content=response.get("content", ""),
                             error=response.get("error"),
+                            search_results=response.get("search_results"),
                         )
 
                         result_dict = _analysis_to_dict(analysis)

@@ -128,21 +128,97 @@ class ModelClient:
     # ---------- 各模型联网搜索 ----------
 
     def _qwen_search(self, messages: list) -> Dict[str, Any]:
-        """通义千问：DashScope enable_search + forced_search"""
-        response = self.client.chat.completions.create(
-            model=self.config["model"],
-            messages=messages,
-            max_tokens=self.config.get("max_tokens", 4096),
-            temperature=self.config.get("temperature", 0.7),
-            timeout=120,
-            extra_body={
+        """通义千问：DashScope enable_search + forced_search
+
+        使用 DashScope 原生协议（非 OpenAI 兼容）以获取 search_info 搜索引用来源。
+        OpenAI 兼容端点不支持 enable_source / enable_citation，
+        因此直接调用 DashScope HTTP API 来获取带引用来源的搜索结果。
+        """
+        # --- 使用 DashScope 原生 HTTP API 以获取 search_info ---
+        dashscope_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        ds_messages = []
+        for m in messages:
+            ds_messages.append({"role": m["role"], "content": m["content"]})
+
+        payload = {
+            "model": self.config["model"],
+            "input": {
+                "messages": ds_messages,
+            },
+            "parameters": {
                 "enable_search": True,
                 "search_options": {
                     "forced_search": True,
-                }
+                    "enable_source": True,
+                },
+                "result_format": "message",
             },
-        )
-        return self._parse_response(response)
+        }
+
+        try:
+            resp = httpx.post(dashscope_url, json=payload, headers=headers, timeout=120)
+            data = resp.json()
+
+            # 解析 DashScope 原生响应
+            output = data.get("output", {})
+            choices = output.get("choices", [])
+            content = ""
+            if choices:
+                msg = choices[0].get("message", {})
+                content = msg.get("content", "") or data.get("output", {}).get("text", "")
+
+            # 提取 search_info 中的搜索引用来源
+            search_results = []
+            search_info = output.get("search_info", {})
+            for sr in search_info.get("search_results", []):
+                search_results.append({
+                    "index": sr.get("index", 0),
+                    "title": sr.get("title", ""),
+                    "url": sr.get("url", ""),
+                    "site_name": sr.get("site_name", ""),
+                })
+
+            usage_info = None
+            usage = data.get("usage")
+            if usage:
+                usage_info = {
+                    "prompt_tokens": usage.get("input_tokens", 0),
+                    "completion_tokens": usage.get("output_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                }
+
+            return self._build_response(
+                content=content,
+                raw_response={
+                    "id": data.get("request_id", ""),
+                    "model": self.config["model"],
+                    "usage": usage_info,
+                },
+                search_results=search_results,
+            )
+
+        except Exception as e:
+            logger.warning(f"通义千问 DashScope 原生 API 调用失败: {e}，回退到 OpenAI 兼容模式")
+            # 回退到 OpenAI 兼容模式（不返回 search_info）
+            response = self.client.chat.completions.create(
+                model=self.config["model"],
+                messages=messages,
+                max_tokens=self.config.get("max_tokens", 4096),
+                temperature=self.config.get("temperature", 0.7),
+                timeout=120,
+                extra_body={
+                    "enable_search": True,
+                    "search_options": {
+                        "forced_search": True,
+                    }
+                },
+            )
+            return self._parse_response(response)
 
     def _kimi_search(self, messages: list) -> Dict[str, Any]:
         """Kimi / 月之暗面：builtin_function tool calling"""
@@ -243,6 +319,8 @@ class ModelClient:
         文心的 OpenAI 兼容端点不支持 enable_web_search，
         需要直接调用 Qianfan v2 API。
         需要 Secret Key 用于 OAuth access_token 获取。
+
+        搜索引用来源从 AppBuilder 响应的 search_info 字段提取。
         """
         # 获取 Secret Key
         secret_key_env = self._search_config.get("secret_key_env", "")
@@ -307,9 +385,35 @@ class ModelClient:
 
             # 解析文心返回
             content = data.get("answer", "") or data.get("content", "")
+
+            # 提取 search_info 中的搜索引用来源
+            search_results = []
+            search_info = data.get("search_info", {})
+            if isinstance(search_info, dict):
+                for sr in search_info.get("search_results", []):
+                    search_results.append({
+                        "index": sr.get("index", 0),
+                        "title": sr.get("title", ""),
+                        "url": sr.get("url", ""),
+                        "site_name": sr.get("site_name", ""),
+                    })
+            # 也检查 plugin_data 格式（部分版本返回格式不同）
+            plugin_data = data.get("plugin_data", [])
+            if not search_results and isinstance(plugin_data, list):
+                for pd in plugin_data:
+                    if pd.get("plugin_name") == "联网搜索" or pd.get("plugin_id") == "web_search":
+                        for sr in pd.get("search_results", []):
+                            search_results.append({
+                                "index": sr.get("index", 0),
+                                "title": sr.get("title", ""),
+                                "url": sr.get("url", ""),
+                                "site_name": sr.get("site_name", ""),
+                            })
+
             return self._build_response(
                 content=content,
                 raw_response=data,
+                search_results=search_results,
             )
         except Exception as e:
             logger.error(f"文心一言 联网搜索 API 错误: {e}")
@@ -431,14 +535,23 @@ class ModelClient:
     # ---------- 工具方法 ----------
 
     def _build_response(self, content: str, raw_response: Any = None,
-                        error: str = None) -> Dict[str, Any]:
-        """构建标准响应格式"""
+                        error: str = None, search_results: list = None) -> Dict[str, Any]:
+        """构建标准响应格式
+
+        Args:
+            content: 模型回复文本
+            raw_response: 原始API响应
+            error: 错误信息
+            search_results: API返回的联网搜索引用来源列表
+                [{"index": int, "title": str, "url": str, "site_name": str}, ...]
+        """
         return {
             "model": self.model_key,
             "model_name": self.name,
             "content": content or "",
             "raw_response": raw_response,
             "error": error,
+            "search_results": search_results or [],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 

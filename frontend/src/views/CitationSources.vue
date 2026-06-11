@@ -5,6 +5,12 @@
 
     <el-card class="filter-card">
       <div class="filters">
+        <div class="filter-item">
+          <span class="filter-label">评测轮次：</span>
+          <el-select v-model="selectedRunId" placeholder="全部轮次" clearable style="width:240px" @change="onRunChange">
+            <el-option v-for="run in completedRuns" :key="run.id" :label="runLabel(run)" :value="run.id" />
+          </el-select>
+        </div>
         <div class="filter-item date-filter">
           <span class="filter-label">日期：</span>
           <el-date-picker
@@ -167,6 +173,7 @@ const sourceRows = ref([])
 const dateRange = ref([])
 const selectedPlatform = ref('all')
 const searchKeyword = ref('')
+const selectedRunId = ref('')
 const topSourceChartRef = ref(null)
 const platformPieChartRef = ref(null)
 const drilldownVisible = ref(false)
@@ -213,6 +220,7 @@ const filteredRawRows = computed(() => {
   const [start, end] = dateRange.value || []
   const keyword = searchKeyword.value.trim().toLowerCase()
   return sourceRows.value.filter(row => {
+    if (selectedRunId.value && row.run_id !== selectedRunId.value) return false
     if (!platformMatches(row, selectedPlatform.value)) return false
     if (start && row.run_date < start) return false
     if (end && row.run_date > end) return false
@@ -279,6 +287,27 @@ function toDateOnly(ts) {
 function initDateRange() {
   const dates = completedRuns.value.map(r => toDateOnly(r.completed_at || r.started_at)).filter(Boolean).sort()
   if (dates.length) dateRange.value = [dates[0], dates[dates.length - 1]]
+}
+
+function runLabel(run) {
+  const ts = run.completed_at || run.started_at
+  const d = ts ? new Date(ts) : null
+  const time = d ? `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : ''
+  const mode = run.mode === 'webchat' ? '🌐' : '🔗'
+  return `${mode} ${run.name || '评测'} (${time})`
+}
+
+function onRunChange(runId) {
+  if (runId) {
+    const run = completedRuns.value.find(r => r.id === runId)
+    if (run) {
+      const d = toDateOnly(run.completed_at || run.started_at)
+      dateRange.value = [d, d]
+    }
+  } else {
+    initDateRange()
+  }
+  renderCharts()
 }
 
 async function loadData() {
@@ -369,7 +398,10 @@ async function openDrilldown(source) {
 
   try {
     const result = {}
-    for (const run of completedRuns.value) {
+    const runsToQuery = selectedRunId.value
+      ? completedRuns.value.filter(r => r.id === selectedRunId.value)
+      : completedRuns.value
+    for (const run of runsToQuery) {
       try {
         const res = await apiFetch(`/results/${run.id}/citation-drilldown?source_channel=${encodeURIComponent(source)}`)
         const data = res.data || {}

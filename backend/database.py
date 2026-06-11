@@ -21,15 +21,34 @@ THIRD_PARTY_CITATION_DOMAINS = [
     "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
     "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
     "mp.weixin.qq.com",
+    # 补充常见中文技术/资讯社区
+    "jianshu.com", "oscimg.com", "weibo.com", "36kr.com",
+    "stackoverflow.com", "gitee.com", "readthedocs.io",
+    "tianyancha.com", "qcc.com",
+    # 自媒体平台（头条/百家号/搜狐号/网易号）
+    "toutiao.com", "baijiahao.baidu.com", "sohu.com", "163.com",
 ]
 
 
 def is_ucloud_related_citation(row: Dict[str, Any], item: Dict[str, Any], window: int = 180) -> bool:
-    """判断第三方引用 URL 附近上下文是否在讲 UCloud/优刻得。"""
+    """判断第三方引用 URL 附近上下文是否在讲 UCloud/优刻得。
+
+    对于 API 返回的搜索引用（position < 0），直接视为有效引用，
+    因为 API 搜索结果本身就是模型回答的来源，与回答主题相关。
+    """
     if item.get("is_ucloud"):
         return True
-    content = row.get("raw_content") or ""
+    # API 搜索引用（position 为负数）直接视为与 UCloud 相关
+    # 因为这些 URL 是模型联网搜索时返回的来源，与回答内容直接相关
     position = item.get("position")
+    if position is not None:
+        try:
+            pos = int(position)
+            if pos < 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    content = row.get("raw_content") or ""
     if not content or position is None:
         return False
     try:
@@ -60,24 +79,41 @@ def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         if cit.get("citation_type") == "url" and not is_ucloud_related_citation(row, cit):
             continue
         effective.append(cit)
-    if row.get("ucloud_mentioned"):
-        seen = {
-            (c.get("citation_type"), c.get("content"), c.get("position"))
-            for c in effective if isinstance(c, dict)
-        }
-        for item in urls or []:
-            if not isinstance(item, dict) or item.get("citation_type") != "url":
-                continue
-            url = (item.get("content") or "").lower()
-            if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
-                continue
-            if not is_ucloud_related_citation(row, item):
-                continue
-            key = ("url", item.get("content"), item.get("position"))
-            if key in seen:
-                continue
+    # 从 all_cited_urls 中补充有效引用
+    # 已在 citations 中的 API 搜索引用（position < 0）无需重复处理
+    seen = {
+        (c.get("citation_type"), c.get("content"), c.get("position"))
+        for c in effective if isinstance(c, dict)
+    }
+    for item in urls or []:
+        if not isinstance(item, dict) or item.get("citation_type") != "url":
+            continue
+        key = ("url", item.get("content"), item.get("position"))
+        if key in seen:
+            continue
+        # API 搜索引用（position < 0）已经过 analyzer 认定，直接计入
+        try:
+            pos = int(item.get("position", 0))
+            is_api_search = pos < 0
+        except (TypeError, ValueError):
+            is_api_search = False
+
+        if is_api_search:
             effective.append({**item, "is_ucloud": bool(item.get("is_ucloud", False))})
             seen.add(key)
+            continue
+
+        # 正文中出现的 URL：仅当回答提及 UCloud 时，
+        # 且来自第三方来源域名、且上下文与 UCloud 相关，才计入
+        if not row.get("ucloud_mentioned"):
+            continue
+        url = (item.get("content") or "").lower()
+        if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+            continue
+        if not is_ucloud_related_citation(row, item):
+            continue
+        effective.append({**item, "is_ucloud": bool(item.get("is_ucloud", False))})
+        seen.add(key)
     return effective
 
 

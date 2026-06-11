@@ -274,8 +274,12 @@ class KimiWebChatClient(WebChatClientBase):
 
     async def _navigate_to_chat(self, page: Page):
         """导航到 Kimi 新对话页面"""
-        await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(2)
+        try:
+            await page.goto("https://www.kimi.com", wait_until="networkidle", timeout=30000)
+        except Exception:
+            # networkidle 可能超时，回退到 domcontentloaded
+            await page.goto("https://www.kimi.com", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
 
     async def _type_question(self, page: Page, question: str):
         """在输入框中输入问题（Kimi 用 contenteditable div）
@@ -283,7 +287,17 @@ class KimiWebChatClient(WebChatClientBase):
         使用 Playwright 物理键盘输入，比 JS 设置 textContent 更可靠。
         Kimi 的编辑器是 React-based，不响应直接 DOM 修改。
         """
-        # 找到输入框
+        # 先关闭可能遮挡输入框的侧边栏遮罩
+        try:
+            mask = page.locator("div.mask").first
+            if await mask.is_visible(timeout=3000):
+                await mask.click(timeout=3000)
+                await asyncio.sleep(0.5)
+                logger.info("WebChat kimi: closed sidebar mask")
+        except Exception:
+            pass
+
+        # 等待输入框出现（页面可能还在加载）
         input_box = None
         for selector in [
             "div.chat-input-editor",
@@ -292,19 +306,19 @@ class KimiWebChatClient(WebChatClientBase):
         ]:
             try:
                 box = page.locator(selector).first
-                if await box.is_visible(timeout=10000):
+                if await box.is_visible(timeout=15000):
                     input_box = box
                     break
             except Exception:
                 continue
 
         if not input_box:
-            await page.screenshot(path="output/kimi_input_debug.png", full_mode=True)
+            await page.screenshot(path="output/kimi_input_debug.png", full_page=True)
             logger.warning("WebChat kimi: 找不到输入框，已截图到 output/kimi_input_debug.png")
             raise RuntimeError("Kimi 输入框未找到")
 
-        # 点击输入框聚焦
-        await input_box.click()
+        # 点击输入框聚焦（force=True 绕过遮罩层拦截）
+        await input_box.click(force=True)
         await asyncio.sleep(0.3)
 
         # 物理键盘输入（Kimi React 编辑器只响应真实键盘事件）
@@ -615,8 +629,10 @@ class DeepSeekWebChatClient(WebChatClientBase):
     INPUT_SELECTOR = (
         "textarea[data-testid='chat-input'], "
         "textarea[id*='chat'], textarea[class*='input'], textarea[class*='chat-input'], "
+        "textarea.ds-scroll-area, "
         "[contenteditable='true'][class*='input'], "
-        "#chat-input, .chat-input textarea"
+        "#chat-input, .chat-input textarea, "
+        "textarea"
     )
     SEND_SELECTOR = (
         "button[data-testid='send-button'], "
@@ -625,8 +641,11 @@ class DeepSeekWebChatClient(WebChatClientBase):
         "button[type='submit'][class*='chat']"
     )
     RESPONSE_SELECTOR = (
+        "[class*='assistant-message'], "
+        "div.ds-markdown.ds-assistant-message-main-content, "
+        "div.ds-markdown, "
         "[data-testid='assistant-message'], "
-        "[class*='assistant-message'], [class*='message-assistant'], "
+        "[class*='message-assistant'], "
         "[class*='markdown-body'], [class*='markdown'], "
         ".chat-message-assistant, .message-content"
     )
@@ -645,9 +664,18 @@ class DeepSeekWebChatClient(WebChatClientBase):
 
     async def _type_question(self, page: Page, question: str):
         """在输入框中输入问题"""
+        # 先关闭可能遮挡的侧边栏遮罩
+        try:
+            mask = page.locator("div[class*='mask'], div[class*='overlay'], div[class*='backdrop']").first
+            if await mask.is_visible(timeout=2000):
+                await mask.click(timeout=2000)
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+
         input_el = page.locator(self.INPUT_SELECTOR).first
-        await input_el.wait_for(state="visible", timeout=10000)
-        await input_el.click()
+        await input_el.wait_for(state="visible", timeout=15000)
+        await input_el.click(force=True)
         await asyncio.sleep(0.3)
 
         # 区分 textarea 和 contenteditable
@@ -674,27 +702,77 @@ class DeepSeekWebChatClient(WebChatClientBase):
         DeepSeek 无联网搜索，直接等待文本稳定。
         流式输出完成后文本长度不再变化。
         """
-        # 等响应区域出现
-        try:
-            resp_area = page.locator(self.RESPONSE_SELECTOR).last
-            await resp_area.wait_for(state="visible", timeout=30000)
-        except Exception:
-            # 回退：等页面内容变化
-            await asyncio.sleep(10)
+        # 等响应区域出现（尝试多个选择器）
+        response_found = False
+        for selector in [
+            "div.ds-markdown.ds-assistant-message-main-content",
+            "[class*='assistant-message']",
+            "[class*='markdown']",
+        ]:
+            try:
+                resp_area = page.locator(selector).last
+                await resp_area.wait_for(state="visible", timeout=15000)
+                response_found = True
+                logger.info(f"WebChat deepseek: response area found via {selector}")
+                break
+            except Exception:
+                continue
 
-        # 等文本稳定
-        await self._wait_for_text_stability(
-            page, self.RESPONSE_SELECTOR, timeout=timeout
-        )
+        if not response_found:
+            logger.warning("WebChat deepseek: no response area found, waiting extra time")
+            await asyncio.sleep(15)
+
+        # 等文本稳定（用页面整体文本长度判断，更可靠）
+        await self._wait_for_deepseek_text_stability(page, timeout=timeout)
+
+    async def _wait_for_deepseek_text_stability(self, page: Page, timeout: int = 120):
+        """DeepSeek 文本稳定性检查"""
+        prev_len = 0
+        stable_count = 0
+        elapsed = 0
+        interval = 3
+
+        while elapsed < timeout:
+            await asyncio.sleep(interval)
+            elapsed += interval
+
+            current_len = await page.evaluate("""() => {
+                const el = document.querySelector(
+                    "div.ds-markdown.ds-assistant-message-main-content, " +
+                    "[class*='assistant-message'], [class*='markdown']"
+                );
+                return el ? (el.innerText || '').length : 0;
+            }""")
+
+            if current_len > prev_len + 30:
+                stable_count = 0
+                prev_len = current_len
+            else:
+                stable_count += 1
+                if stable_count >= 3:
+                    logger.info(f"WebChat deepseek: response complete ({current_len} chars)")
+                    return
 
     async def _extract_response(self, page: Page) -> str:
         """提取 DeepSeek 响应文本，包括引用链接"""
-        try:
-            response_area = page.locator(self.RESPONSE_SELECTOR).last
-            await response_area.wait_for(state="visible", timeout=10000)
-        except Exception:
+        # 优先用精确的 DeepSeek 选择器（避免匹配到 markdown 子元素）
+        response_area = None
+        for selector in [
+            "div.ds-markdown.ds-assistant-message-main-content",
+            "[class*='assistant-message']",
+        ]:
             try:
-                response_area = page.locator("[class*='markdown']").last
+                area = page.locator(selector).last
+                if await area.is_visible(timeout=5000):
+                    response_area = area
+                    logger.info(f"WebChat deepseek: extract via {selector}")
+                    break
+            except Exception:
+                continue
+
+        if not response_area:
+            try:
+                response_area = page.locator("[class*='markdown']").first
                 await response_area.wait_for(state="visible", timeout=10000)
             except Exception:
                 return ""

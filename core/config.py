@@ -266,6 +266,15 @@ URL_CHANNEL_MAPPING = {
     "thepaper.cn": "澎湃新闻",
     "jiemian.com": "界面新闻",
     "caixin.com": "财新",
+    # 自媒体平台
+    "toutiao.com": "今日头条",
+    "m.toutiao.com": "今日头条",
+    "baijiahao.baidu.com": "百家号",
+    "sohu.com": "搜狐号",
+    "www.sohu.com": "搜狐号",
+    "163.com": "网易号",
+    "www.163.com": "网易号",
+    "c.m.163.com": "网易号",
     # 文档/百科/代码
     "wikipedia.org": "维基百科",
     "github.com": "GitHub",

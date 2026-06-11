@@ -324,7 +324,7 @@
             </el-table-column>
             <el-table-column label="提及率" width="80" sortable :sort-method="(a,b) => a.metrics.coverage.numerator - b.metrics.coverage.numerator">
               <template #default="{ row }">
-                <span :class="row.metrics.coverage.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.coverage.value }}</span>
+                <span :class="row.metrics.coverage.value === '-' ? 'val-na' : (row.metrics.coverage.numerator ? 'val-hit' : 'val-miss')">{{ row.metrics.coverage.value }}</span>
               </template>
             </el-table-column>
             <el-table-column label="引用率" width="80" sortable :sort-method="(a,b) => a.metrics.citation.numerator - b.metrics.citation.numerator">
@@ -334,7 +334,7 @@
             </el-table-column>
             <el-table-column label="TOP3 推荐率" width="120" sortable :sort-method="(a,b) => a.metrics.recommendation.numerator - b.metrics.recommendation.numerator">
               <template #default="{ row }">
-                <span :class="row.metrics.recommendation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.recommendation.value }}</span>
+                <span :class="row.metrics.recommendation.value === '-' ? 'val-na' : (row.metrics.recommendation.numerator ? 'val-hit' : 'val-miss')">{{ row.metrics.recommendation.value }}</span>
               </template>
             </el-table-column>
             <el-table-column label="情感" width="80" sortable :sort-method="(a,b) => a.metrics.sentiment.score - b.metrics.sentiment.score">
@@ -793,6 +793,7 @@ onMounted(loadData)
 .drilldown-filters { margin-bottom: 12px; display: flex; align-items: center; }
 .val-hit { color: #67c23a; font-weight: 600; }
 .val-miss { color: #c0c4cc; }
+.val-na { color: #b0b0b0; font-style: italic; }
 .val-neutral { color: #e6a23c; }
 .expand-content { padding: 8px 16px; background: #fafafa; }
 .expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }

@@ -372,12 +372,25 @@ async def get_question_drilldown(run_id: str, model_key: str):
         q_info = question_map.get(qid, {})
         has_error = r.get("error_message") and r["error_message"] != ""
 
+        # 判断是否为自然问题（引导型和题干含UCloud/优刻得的排除提及率/TOP3推荐率）
+        q_text = q_info.get("text", "")
+        q_category = q_info.get("category", "")
+        is_natural = db.is_natural_question(q_text, q_category)
+
         # 构建指标计数（分子/分母）
         denom = 1
         coverage_num = 1 if r.get("ucloud_mentioned") and not has_error else 0
-        citation_num = 1 if r.get("has_citation") and not has_error else 0
+        citation_num = 1 if db.has_effective_citation(r) and not has_error else 0
         recommend_num = 1 if r.get("ucloud_recommended") and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
+
+        # 引导型/非自然问题：提及率和TOP3推荐率显示"-"
+        if not is_natural:
+            coverage_display = "-"
+            recommend_display = "-"
+        else:
+            coverage_display = f"{coverage_num}/{denom}" if not has_error else "-"
+            recommend_display = f"{recommend_num}/{denom}" if not has_error else "-"
 
         # 回答摘要（表格列用）和完整回答内容（展开区用）
         raw = r.get("raw_content", "") or ""
@@ -387,16 +400,19 @@ async def get_question_drilldown(run_id: str, model_key: str):
         questions.append({
             "question_id": qid,
             "question_text": q_info.get("text", qid),
-            "category": q_info.get("category", ""),
+            "category": q_category,
             "question_type": q_info.get("type", ""),
+            "is_natural": is_natural,
             "metrics": {
-                "coverage": {"numerator": coverage_num, "denominator": denom if not has_error else 0,
-                             "value": f"{coverage_num}/{denom}" if not has_error else "-"},
+                "coverage": {"numerator": coverage_num if is_natural else 0,
+                             "denominator": denom if is_natural and not has_error else 0,
+                             "value": coverage_display},
                 "citation": {"numerator": citation_num, "denominator": denom if not has_error else 0,
                              "value": f"{citation_num}/{denom}" if not has_error else "-"},
-                "recommendation": {"numerator": recommend_num, "denominator": denom if not has_error else 0,
-                                   "value": f"{recommend_num}/{denom}" if not has_error else "-",
-                                   "strength": strength},
+                "recommendation": {"numerator": recommend_num if is_natural else 0,
+                                   "denominator": denom if is_natural and not has_error else 0,
+                                   "value": recommend_display,
+                                   "strength": strength if is_natural else "-"},
                 "sentiment": {"score": round(r.get("sentiment_score", 0.5), 4),
                               "label": r.get("sentiment_label", "neutral")},
             },

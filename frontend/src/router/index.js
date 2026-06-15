@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getToken, removeToken } from '../composables/useWebSocket'
+import { getToken, removeToken, setRole, setUsername } from '../composables/useWebSocket'
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
@@ -39,6 +39,9 @@ router.beforeEach(async (to, from, next) => {
       removeToken()
       return next('/login')
     }
+    // 同步 role/username（服务端可能更新了角色）
+    if (data.data?.role) setRole(data.data.role)
+    if (data.data?.username) setUsername(data.data.username)
   } catch (e) {
     // 网络错误不拦截，让页面正常加载
   }

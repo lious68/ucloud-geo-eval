@@ -1,5 +1,6 @@
 """评测管理路由"""
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form, Depends
+from routers.auth import require_admin
 from typing import Optional
 import json
 import uuid
@@ -37,7 +38,7 @@ ws_manager = ConnectionManager()
 
 
 @router.post("")
-async def create_evaluation(req: models.EvaluationCreate):
+async def create_evaluation(req: models.EvaluationCreate, user=Depends(require_admin)):
     """创建评测任务"""
     try:
         run_id = await start_evaluation(
@@ -86,14 +87,14 @@ async def get_evaluation(run_id: str):
 
 
 @router.delete("/{run_id}")
-async def delete_evaluation(run_id: str):
+async def delete_evaluation(run_id: str, user=Depends(require_admin)):
     """删除评测"""
     await db.delete_run(run_id)
     return {"success": True}
 
 
 @router.post("/{run_id}/cancel")
-async def cancel_evaluation(run_id: str):
+async def cancel_evaluation(run_id: str, user=Depends(require_admin)):
     """取消正在运行的评测"""
     # 取消后台 asyncio task
     task = _active_tasks.get(run_id)
@@ -130,6 +131,7 @@ async def evaluation_ws(ws: WebSocket, run_id: str, token: str = None):
 async def import_local_results(
     file: UploadFile = File(..., description="本地 Playwright runner 导出的 JSON 文件"),
     run_name: str = Form("本地WebChat导入"),
+    user=Depends(require_admin),
 ):
     """导入本地 Playwright WebChat 评测结果
 
@@ -293,7 +295,7 @@ async def recalculate_scores(run_id: str):
 
 
 @router.post("/export-webchat-config")
-async def export_webchat_config(req: models.EvaluationCreate):
+async def export_webchat_config(req: models.EvaluationCreate, user=Depends(require_admin)):
     """导出 WebChat 本地评测任务配置
 
     前端选择 WebChat 模型后调用此接口，返回一个 task_config.json，

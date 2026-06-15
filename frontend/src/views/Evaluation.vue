@@ -81,10 +81,10 @@
 
         <el-form-item>
           <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-            <el-button type="primary" @click="startEval" :disabled="!form.model_keys.length || !canStart || form.mode === 'webchat'">
+            <el-button v-if="isAdmin()" type="primary" @click="startEval" :disabled="!form.model_keys.length || !canStart || form.mode === 'webchat'">
               <el-icon><VideoPlay /></el-icon> 开始评测
             </el-button>
-            <el-button v-if="form.mode === 'webchat'" type="success" @click="downloadConfig" :loading="downloadingConfig">
+            <el-button v-if="form.mode === 'webchat' && isAdmin()" type="success" @click="downloadConfig" :loading="downloadingConfig">
               <el-icon><Download /></el-icon> 下载任务配置（在本地电脑运行）
             </el-button>
             <span v-if="!canStart" style="margin-left:12px;color:#999">
@@ -99,7 +99,7 @@
     </el-card>
 
     <!-- 本地 WebChat 结果导入 -->
-    <el-card style="margin-top:16px">
+    <el-card v-if="isAdmin()" style="margin-top:16px">
       <template #header>
         <div style="display:flex;align-items:center;gap:8px">
           <span>📂 导入本地 WebChat 结果</span>
@@ -203,10 +203,10 @@
 
       <!-- 操作按钮：终止 / 删除 -->
       <div style="text-align:center;margin-top:16px">
-        <el-button v-if="evalStore.progressPercent < 100 && evalStore.runId" type="warning" plain @click="cancelEval">
+        <el-button v-if="isAdmin() && evalStore.progressPercent < 100 && evalStore.runId" type="warning" plain @click="cancelEval">
           <el-icon><CircleClose /></el-icon> 终止评测
         </el-button>
-        <el-button v-if="evalStore.progressPercent >= 100 && evalStore.runId" type="danger" plain @click="deleteEval">
+        <el-button v-if="isAdmin() && evalStore.progressPercent >= 100 && evalStore.runId" type="danger" plain @click="deleteEval">
           <el-icon><Delete /></el-icon> 删除此评测
         </el-button>
         <el-button v-if="evalStore.progressPercent >= 100" type="primary" @click="viewResult">
@@ -227,7 +227,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { apiFetch } from '../composables/useWebSocket'
+import { apiFetch, isAdmin } from '../composables/useWebSocket'
 import { useEvalProgressStore } from '../stores/evalProgress'
 
 const router = useRouter()

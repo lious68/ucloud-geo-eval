@@ -2,8 +2,13 @@
   <div class="settings">
     <h2 class="page-title">⚙️ 系统设置</h2>
 
+    <!-- 查看者提示 -->
+    <el-card v-if="!isAdmin()" style="margin-bottom:20px">
+      <el-alert type="info" :closable="false">当前以查看者身份登录，仅可查看数据，无法修改配置</el-alert>
+    </el-card>
+
     <!-- ModelVerse 一键配置 -->
-    <el-card style="margin-bottom:20px">
+    <el-card v-if="isAdmin()" style="margin-bottom:20px">
       <template #header><strong>🚀 ModelVerse 中转平台（推荐）</strong></template>
       <el-alert type="info" :closable="false" style="margin-bottom:16px">
         使用 ModelVerse 中转平台，一个 API Key 访问全部 5 个模型，无需单独配置各厂商 API Key
@@ -23,7 +28,7 @@
     </el-card>
 
     <!-- 模型API Key配置 -->
-    <el-card style="margin-bottom:20px">
+    <el-card v-if="isAdmin()" style="margin-bottom:20px">
       <template #header>
         <strong>🔑 模型 API Key 配置</strong>
         <el-tag v-if="useModelverse" type="warning" style="margin-left:12px" size="small">当前使用 ModelVerse 中转</el-tag>
@@ -58,7 +63,7 @@
     </el-card>
 
     <!-- 评分权重 -->
-    <el-card style="margin-bottom:20px">
+    <el-card v-if="isAdmin()" style="margin-bottom:20px">
       <template #header><strong>⚖️ 评分权重配置</strong></template>
       <el-form label-width="120px">
         <el-form-item v-for="(label, key) in weightLabels" :key="key" :label="label">
@@ -69,13 +74,59 @@
         </el-form-item>
       </el-form>
     </el-card>
+
+    <!-- 用户管理 -->
+    <el-card v-if="isAdmin()" style="margin-bottom:20px">
+      <template #header>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <strong>👥 用户管理</strong>
+          <el-button type="primary" size="small" @click="showAddUserDialog = true">添加用户</el-button>
+        </div>
+      </template>
+      <el-table :data="users" stripe>
+        <el-table-column prop="username" label="用户名" width="180" />
+        <el-table-column label="角色" width="120">
+          <template #default="{ row }">
+            <el-tag :type="row.role === 'admin' ? 'danger' : 'info'" size="small">{{ row.role === 'admin' ? '管理员' : '查看者' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" min-width="180" />
+        <el-table-column label="操作" width="100">
+          <template #default="{ row }">
+            <el-button v-if="row.username !== currentUsername" size="small" type="danger" plain @click="deleteUser(row.id, row.username)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- 添加用户对话框 -->
+    <el-dialog v-model="showAddUserDialog" title="添加用户" width="400px">
+      <el-form label-width="80px">
+        <el-form-item label="用户名">
+          <el-input v-model="newUser.username" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="newUser.password" type="password" placeholder="请输入密码" show-password />
+        </el-form-item>
+        <el-form-item label="角色">
+          <el-select v-model="newUser.role" style="width:100%">
+            <el-option label="查看者" value="viewer" />
+            <el-option label="管理员" value="admin" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddUserDialog = false">取消</el-button>
+        <el-button type="primary" @click="addUser" :loading="addUserLoading">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { apiFetch } from '../composables/useWebSocket'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { isAdmin, getUsername, apiFetch } from '../composables/useWebSocket'
 
 const models = ref([])
 const useModelverse = ref(false)
@@ -84,6 +135,50 @@ const mvKeyPreview = ref('')
 const mvLoading = ref(false)
 const weights = reactive({ coverage_rate: 0.45, mention_rate: 0.0, citation_rate: 0.25, recommendation_rate: 0.20, sentiment_score: 0.10 })
 const weightLabels = { coverage_rate: '提及率', mention_rate: '原提及频次', citation_rate: '引用率', recommendation_rate: 'TOP3 推荐率', sentiment_score: '情感值' }
+
+// 用户管理
+const users = ref([])
+const showAddUserDialog = ref(false)
+const addUserLoading = ref(false)
+const newUser = ref({ username: '', password: '', role: 'viewer' })
+const currentUsername = computed(() => getUsername())
+
+async function loadUsers() {
+  try {
+    const res = await apiFetch('/auth/users')
+    users.value = res.data || []
+  } catch (e) { console.error(e) }
+}
+
+async function addUser() {
+  if (!newUser.value.username || !newUser.value.password) {
+    ElMessage.warning('请填写用户名和密码')
+    return
+  }
+  addUserLoading.value = true
+  try {
+    await apiFetch('/auth/users', {
+      method: 'POST',
+      body: JSON.stringify(newUser.value),
+    })
+    ElMessage.success('用户添加成功')
+    showAddUserDialog.value = false
+    newUser.value = { username: '', password: '', role: 'viewer' }
+    await loadUsers()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { addUserLoading.value = false }
+}
+
+async function deleteUser(id, username) {
+  try {
+    await ElMessageBox.confirm(`确定要删除用户 "${username}" 吗？`, '确认删除', { type: 'warning' })
+    await apiFetch(`/auth/users/${id}`, { method: 'DELETE' })
+    ElMessage.success('用户已删除')
+    await loadUsers()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message)
+  }
+}
 
 async function loadModels() {
   try {
@@ -153,7 +248,7 @@ async function saveWeights() {
   } catch (e) { ElMessage.error(e.message) }
 }
 
-onMounted(() => { loadModels(); loadWeights() })
+onMounted(() => { loadModels(); loadWeights(); if (isAdmin()) loadUsers() })
 </script>
 
 <style scoped>

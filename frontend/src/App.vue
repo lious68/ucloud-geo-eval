@@ -57,7 +57,13 @@
       </div>
 
       <div class="sidebar-footer">
-        <el-button text style="color:rgba(255,255,255,0.5);width:100%" @click="handleLogout">
+        <div class="user-info">
+          <span class="user-name">{{ currentUsername }}</span>
+          <el-tag :type="currentRole === 'admin' ? 'warning' : 'info'" size="small" effect="dark">
+            {{ currentRole === 'admin' ? '管理员' : '查看者' }}
+          </el-tag>
+        </div>
+        <el-button text style="color:rgba(255,255,255,0.5);width:100%;margin-top:8px" @click="handleLogout">
           <el-icon><SwitchButton /></el-icon> 退出登录
         </el-button>
       </div>
@@ -71,12 +77,14 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { removeToken, getToken } from './composables/useWebSocket'
+import { removeToken, getToken, getRole, getUsername } from './composables/useWebSocket'
 import { useEvalProgressStore } from './stores/evalProgress'
 
 const route = useRoute()
 const router = useRouter()
 const currentRoute = computed(() => route.path)
+const currentRole = computed(() => getRole())
+const currentUsername = computed(() => getUsername())
 const evalStore = useEvalProgressStore()
 
 // 页面加载时自动检测是否有运行中的评测，恢复状态（需要登录态）
@@ -114,6 +122,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft
 .sidebar .el-menu-item:hover { color: #fff; background: rgba(255,255,255,0.1); }
 .sidebar .el-menu-item.is-active { color: #fff; background: rgba(15,52,96,0.6); border-right: 3px solid #409eff; }
 .sidebar-footer { padding: 12px; border-top: 1px solid rgba(255,255,255,0.1); }
+.user-info { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.user-name { color: rgba(255,255,255,0.8); font-size: 14px; }
 .main-content { padding: 24px; overflow-y: auto; background: #f0f2f5; }
 </style>
 

@@ -1,5 +1,6 @@
 """问题管理路由"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from routers.auth import require_admin
 import json
 import database as db
 import models
@@ -38,14 +39,14 @@ async def list_types():
 
 
 @router.post("")
-async def create_question(q: models.QuestionCreate):
+async def create_question(q: models.QuestionCreate, user=Depends(require_admin)):
     """新增问题"""
     await db.upsert_question(q.dict())
     return {"success": True}
 
 
 @router.put("/{question_id}")
-async def update_question(question_id: str, q: models.QuestionUpdate):
+async def update_question(question_id: str, q: models.QuestionUpdate, user=Depends(require_admin)):
     """更新问题"""
     existing = await db.get_questions()
     found = [x for x in existing if x["id"] == question_id]
@@ -63,14 +64,14 @@ async def update_question(question_id: str, q: models.QuestionUpdate):
 
 
 @router.delete("/{question_id}")
-async def delete_question(question_id: str):
+async def delete_question(question_id: str, user=Depends(require_admin)):
     """删除问题"""
     await db.delete_question(question_id)
     return {"success": True}
 
 
 @router.post("/import")
-async def import_questions(req: models.QuestionImport):
+async def import_questions(req: models.QuestionImport, user=Depends(require_admin)):
     """批量导入"""
     for q in req.questions:
         await db.upsert_question(q.dict())

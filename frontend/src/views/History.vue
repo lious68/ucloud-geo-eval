@@ -60,7 +60,7 @@
               <el-button size="small" type="primary" @click="viewResult(row.id)" :disabled="row.status!=='completed'">
                 📊 查看
               </el-button>
-              <el-button size="small" type="danger" @click="deleteRun(row.id)">删除</el-button>
+              <el-button v-if="isAdmin()" size="small" type="danger" @click="deleteRun(row.id)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -87,7 +87,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
-import { apiFetch } from '../composables/useWebSocket'
+import { apiFetch, isAdmin } from '../composables/useWebSocket'
 
 const router = useRouter()
 const runs = ref([])

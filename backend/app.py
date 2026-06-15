@@ -92,7 +92,9 @@ async def auth_middleware(request: Request, call_next):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        if await verify_session(token):
+        user_info = await verify_session(token)
+        if user_info:
+            request.state.user = user_info
             return await call_next(request)
 
     return JSONResponse(

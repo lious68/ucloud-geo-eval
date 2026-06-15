@@ -3,7 +3,8 @@ import os
 import sys
 import json
 import logging
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from routers.auth import require_admin
 from typing import Dict
 
 # 添加 core 模块路径
@@ -28,7 +29,7 @@ async def get_auth_status():
 
 
 @router.post("/auth/upload/{model_key}")
-async def upload_auth_state(model_key: str, file: UploadFile = File(...)):
+async def upload_auth_state(model_key: str, file: UploadFile = File(...), user=Depends(require_admin)):
     """上传 Playwright storageState JSON 认证文件
 
     用户在本机运行 setup_webchat_auth.py 后，将生成的 JSON 文件上传到服务器。
@@ -86,7 +87,7 @@ async def validate_auth(model_key: str):
 
 
 @router.delete("/auth/{model_key}")
-async def remove_auth_state(model_key: str):
+async def remove_auth_state(model_key: str, user=Depends(require_admin)):
     """删除认证状态"""
     if model_key not in WEBCHAT_SITES:
         raise HTTPException(400, f"未知模型: {model_key}")

@@ -11,7 +11,7 @@
             <el-option v-for="t in typeList" :key="t" :label="t" :value="t" />
           </el-select>
         </div>
-        <el-button type="primary" @click="openAddDialog"><el-icon><Plus /></el-icon> 新增问题</el-button>
+        <el-button v-if="isAdmin()" type="primary" @click="openAddDialog"><el-icon><Plus /></el-icon> 新增问题</el-button>
       </div>
 
       <el-table :data="filteredQuestions" stripe max-height="600">
@@ -26,8 +26,8 @@
         </el-table-column>
         <el-table-column label="操作" width="140">
           <template #default="{ row }">
-            <el-button type="primary" size="small" link @click="editQ(row)">编辑</el-button>
-            <el-button type="danger" size="small" link @click="deleteQ(row.id)">删除</el-button>
+            <el-button v-if="isAdmin()" type="primary" size="small" link @click="editQ(row)">编辑</el-button>
+            <el-button v-if="isAdmin()" type="danger" size="small" link @click="deleteQ(row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -59,7 +59,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { apiFetch } from '../composables/useWebSocket'
+import { apiFetch, isAdmin } from '../composables/useWebSocket'
 
 const questions = ref([])
 const filterCategory = ref('')

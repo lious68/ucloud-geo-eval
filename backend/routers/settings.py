@@ -1,5 +1,6 @@
 """设置管理路由 - 含 ModelVerse 中转平台一键配置"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from routers.auth import require_admin
 import json
 import os
 import sys
@@ -62,7 +63,7 @@ async def get_models():
 
 
 @router.put("/models/{model_key}")
-async def update_model(model_key: str, req: models.ModelConfigUpdate):
+async def update_model(model_key: str, req: models.ModelConfigUpdate, user=Depends(require_admin)):
     """更新单个模型配置"""
     if model_key not in MODELS_CONFIG:
         raise HTTPException(400, f"未知模型: {model_key}")
@@ -76,7 +77,7 @@ async def update_model(model_key: str, req: models.ModelConfigUpdate):
 
 
 @router.post("/modelverse/enable")
-async def enable_modelverse():
+async def enable_modelverse(user=Depends(require_admin)):
     """一键启用 ModelVerse 中转平台 - 所有模型使用统一API"""
     mv = MODELVERSE_CONFIG
     for model_key, model_name in mv["models"].items():
@@ -88,7 +89,7 @@ async def enable_modelverse():
 
 
 @router.post("/modelverse/disable")
-async def disable_modelverse():
+async def disable_modelverse(user=Depends(require_admin)):
     """关闭 ModelVerse，恢复原厂配置"""
     for model_key, cfg in MODELS_CONFIG.items():
         await db.set_setting(f"base_url_{model_key}", cfg["base_url"])
@@ -135,7 +136,7 @@ async def get_keywords():
 
 
 @router.put("/keywords")
-async def update_keywords(req: models.KeywordsUpdate):
+async def update_keywords(req: models.KeywordsUpdate, user=Depends(require_admin)):
     """更新品牌关键词"""
     await db.set_setting("brand_keywords", req.json(ensure_ascii=False))
     return {"success": True}
@@ -153,7 +154,7 @@ async def get_weights():
 
 
 @router.put("/weights")
-async def update_weights(req: models.WeightsUpdate):
+async def update_weights(req: models.WeightsUpdate, user=Depends(require_admin)):
     """更新评分权重"""
     await db.set_setting("geo_weights", req.json())
     return {"success": True}

@@ -204,7 +204,17 @@ CREATE TABLE IF NOT EXISTS geo_scores (
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP
+    expires_at TIMESTAMP,
+    username TEXT,
+    role TEXT DEFAULT 'admin'
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'viewer',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS questions (
@@ -267,6 +277,31 @@ async def _migrate_add_columns(db: aiosqlite.Connection):
         await db.commit()
     except aiosqlite.OperationalError:
         pass  # 列已存在
+
+    # 添加 username/role 列到 admin_sessions
+    for col_name, col_default in [("username", None), ("role", "'admin'")]:
+        try:
+            default_clause = f" DEFAULT {col_default}" if col_default else ""
+            await db.execute(f"ALTER TABLE admin_sessions ADD COLUMN {col_name} TEXT{default_clause}")
+            await db.commit()
+        except aiosqlite.OperationalError:
+            pass  # 列已存在
+
+    # 自动将旧 admin_password_hash 迁移为 admin 用户
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        user_count = (await cursor.fetchone())[0]
+        if user_count == 0:
+            cursor = await db.execute("SELECT value FROM app_settings WHERE key='admin_password_hash'")
+            row = await cursor.fetchone()
+            if row and row["value"]:
+                await db.execute(
+                    "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                    ("admin", row["value"], "admin")
+                )
+                await db.commit()
+    except Exception:
+        pass
 
 
 async def _import_default_questions(db: aiosqlite.Connection):
@@ -623,41 +658,45 @@ async def get_all_settings() -> Dict[str, str]:
 
 # ============ 认证 ============
 
-async def create_session(token: str, hours: int = 24):
+async def create_session(token: str, username: str = "admin", role: str = "admin", hours: int = 24):
     """创建登录会话"""
     from datetime import timedelta
     db = await get_db()
     try:
         expires = (datetime.now() + timedelta(hours=hours)).isoformat()
         await db.execute(
-            "INSERT OR REPLACE INTO admin_sessions (token, created_at, expires_at) VALUES (?, datetime('now'), ?)",
-            (token, expires)
+            "INSERT OR REPLACE INTO admin_sessions (token, created_at, expires_at, username, role) VALUES (?, datetime('now'), ?, ?, ?)",
+            (token, expires, username, role)
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def verify_session(token: str) -> bool:
-    """验证会话token"""
+async def verify_session(token: str) -> Optional[Dict]:
+    """验证会话token，返回用户信息或None"""
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT expires_at FROM admin_sessions WHERE token=?",
+            "SELECT expires_at, username, role FROM admin_sessions WHERE token=?",
             (token,)
         )
         row = await cursor.fetchone()
         if not row:
-            return False
+            return None
         from datetime import datetime
         expires = datetime.fromisoformat(row["expires_at"])
         if datetime.now() > expires:
             await db.execute("DELETE FROM admin_sessions WHERE token=?", (token,))
             await db.commit()
-            return False
-        return True
+            return None
+        user_info = {
+            "username": row["username"] or "admin",
+            "role": row["role"] or "admin",
+        }
+        return user_info
     except Exception:
-        return False
+        return None
     finally:
         await db.close()
 
@@ -680,6 +719,66 @@ async def get_admin_password_hash() -> str:
 async def set_admin_password_hash(hashed: str):
     """设置管理员密码hash"""
     await set_setting("admin_password_hash", hashed)
+
+
+# ============ 用户管理 ============
+
+async def create_user(username: str, password_hash: str, role: str = "viewer") -> int:
+    """创建用户"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+            (username, password_hash, role)
+        )
+        await db.commit()
+        return cursor.lastrowid
+    except aiosqlite.IntegrityError:
+        raise ValueError(f"用户名 '{username}' 已存在")
+    finally:
+        await db.close()
+
+
+async def get_user_by_username(username: str) -> Optional[Dict]:
+    """根据用户名获取用户"""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM users WHERE username=?", (username,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_users() -> List[Dict]:
+    """列出所有用户"""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, username, role, created_at FROM users ORDER BY id")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def delete_user(user_id: int):
+    """删除用户"""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM users WHERE id=?", (user_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_user_password(username: str, password_hash: str):
+    """更新用户密码"""
+    db = await get_db()
+    try:
+        await db.execute("UPDATE users SET password_hash=? WHERE username=?", (password_hash, username))
+        await db.commit()
+    finally:
+        await db.close()
 
 
 async def backfill_citations(run_id: str) -> int:

@@ -8,8 +8,12 @@
       </div>
       <el-form @submit.prevent="handleLogin">
         <el-form-item>
+          <el-input v-model="username" placeholder="用户名" size="large"
+            @keyup.enter="handleLogin" />
+        </el-form-item>
+        <el-form-item>
           <el-input v-model="password" :type="showPwd ? 'text' : 'password'"
-            :placeholder="isFirstLogin ? '设置管理密码（至少6位）' : '请输入管理密码'" size="large"
+            :placeholder="isFirstLogin ? '设置管理密码（至少6位）' : '请输入密码'" size="large"
             @keyup.enter="handleLogin">
             <template #suffix>
               <el-button link @click="showPwd = !showPwd">
@@ -34,9 +38,10 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { setToken } from '../composables/useWebSocket'
+import { setToken, setRole, setUsername } from '../composables/useWebSocket'
 
 const router = useRouter()
+const username = ref('admin')
 const password = ref('')
 const confirmPassword = ref('')
 const showPwd = ref(false)
@@ -52,6 +57,7 @@ onMounted(async () => {
 })
 
 async function handleLogin() {
+  if (!username.value) return ElMessage.warning('请输入用户名')
   if (!password.value) return ElMessage.warning('请输入密码')
   if (isFirstLogin.value && password.value !== confirmPassword.value) return ElMessage.warning('两次密码不一致')
   if (isFirstLogin.value && password.value.length < 6) return ElMessage.warning('密码至少6位')
@@ -61,11 +67,13 @@ async function handleLogin() {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: password.value }),
+      body: JSON.stringify({ username: username.value, password: password.value }),
     })
     const data = await res.json()
     if (data.success) {
       setToken(data.data.token)
+      setRole(data.data.role || 'viewer')
+      setUsername(data.data.username || username.value)
       ElMessage.success(isFirstLogin.value ? '密码设置成功' : '登录成功')
       router.push('/dashboard')
     } else {

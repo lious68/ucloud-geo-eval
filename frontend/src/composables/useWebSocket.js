@@ -5,6 +5,8 @@ const API_BASE = '/api'
 
 // Token 管理
 const TOKEN_KEY = 'geo_auth_token'
+const ROLE_KEY = 'geo_auth_role'
+const USERNAME_KEY = 'geo_auth_username'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
@@ -16,6 +18,28 @@ export function setToken(token) {
 
 export function removeToken() {
   localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(ROLE_KEY)
+  localStorage.removeItem(USERNAME_KEY)
+}
+
+export function getRole() {
+  return localStorage.getItem(ROLE_KEY) || 'viewer'
+}
+
+export function setRole(role) {
+  localStorage.setItem(ROLE_KEY, role)
+}
+
+export function getUsername() {
+  return localStorage.getItem(USERNAME_KEY) || ''
+}
+
+export function setUsername(username) {
+  localStorage.setItem(USERNAME_KEY, username)
+}
+
+export function isAdmin() {
+  return getRole() === 'admin'
 }
 
 export function useWebSocket() {
@@ -53,6 +77,10 @@ export async function apiFetch(path, options = {}) {
     removeToken()
     router.push('/login')
     throw new Error('登录已过期')
+  }
+
+  if (res.status === 403) {
+    throw new Error('权限不足，需要管理员权限')
   }
 
   if (res.status === 413) {

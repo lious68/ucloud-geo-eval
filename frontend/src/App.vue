@@ -75,7 +75,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { removeToken, getToken, getRole, getUsername } from './composables/useWebSocket'
 import { useEvalProgressStore } from './stores/evalProgress'
@@ -83,9 +83,15 @@ import { useEvalProgressStore } from './stores/evalProgress'
 const route = useRoute()
 const router = useRouter()
 const currentRoute = computed(() => route.path)
-const currentRole = computed(() => getRole())
-const currentUsername = computed(() => getUsername())
+const currentRole = ref(getRole())
+const currentUsername = ref(getUsername())
 const evalStore = useEvalProgressStore()
+
+// 路由变化时同步 localStorage 中的角色信息（登录后跳转时触发）
+watch(currentRoute, () => {
+  currentRole.value = getRole()
+  currentUsername.value = getUsername()
+})
 
 // 页面加载时自动检测是否有运行中的评测，恢复状态（需要登录态）
 onMounted(() => {

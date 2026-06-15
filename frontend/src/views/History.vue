@@ -193,13 +193,13 @@ function renderTrendChart() {
   const chart = echarts.init(trendChartRef.value)
   chart.setOption({
     title: { text: 'GEO 综合得分趋势', left: 'center', top: 5, textStyle: { fontSize: 14 } },
-    tooltip: { trigger: 'axis' },
+    tooltip: { trigger: 'axis', valueFormatter: value => Number(value).toFixed(1) },
     grid: { left: 60, right: 30, top: 40, bottom: 30 },
     xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11 } },
     yAxis: { type: 'value', name: 'GEO得分', min: 0 },
     series: [{
       type: 'line',
-      data: geoScores,
+      data: geoScores.map(v => Number(v.toFixed(1))),
       smooth: true,
       itemStyle: { color: '#409eff' },
       areaStyle: { color: 'rgba(64,158,255,0.1)' },

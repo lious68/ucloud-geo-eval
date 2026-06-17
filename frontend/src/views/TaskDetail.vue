@@ -107,7 +107,7 @@ async function doImport() {
   try {
     const res = await importResults(route.params.taskId, file.value)
     if (!res?.success) return ElMessage.error(res?.detail || '导入失败')
-    ElMessage.success(res.message)
+    ElMessage.success(res.message || '导入成功')
     importDialog.value = false; file.value = null
     await load()
   } finally { importing.value = false }

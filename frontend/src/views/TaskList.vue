@@ -127,19 +127,23 @@ async function openWizard() {
 }
 
 async function loadConfig() {
-  const [mRes, cRes, wsRes] = await Promise.all([
-    apiFetch('/settings/models'),
-    apiFetch('/questions/categories'),
-    apiFetch('/webchat/auth/status'),
-  ])
-  models.value = (mRes.data && (mRes.data.models || mRes.data)) || []
-  categories.value = cRes.data || []
-  webchatStatus.value = wsRes.data || {}
-  displayModels.value = models.value.map(m => {
-    const ws = webchatStatus.value[m.key] || {}
-    return { ...m, webchat_status: ws.has_auth ? 'ready' : 'no_auth' }
-  })
-  readyModels.value = displayModels.value.filter(m => m.webchat_status === 'ready')
+  try {
+    const [mRes, cRes, wsRes] = await Promise.all([
+      apiFetch('/settings/models'),
+      apiFetch('/questions/categories'),
+      apiFetch('/webchat/auth/status'),
+    ])
+    models.value = (mRes.data && (mRes.data.models || mRes.data)) || []
+    categories.value = cRes.data || []
+    webchatStatus.value = wsRes.data || {}
+    displayModels.value = models.value.map(m => {
+      const ws = webchatStatus.value[m.key] || {}
+      return { ...m, webchat_status: ws.has_auth ? 'ready' : 'no_auth' }
+    })
+    readyModels.value = displayModels.value.filter(m => m.webchat_status === 'ready')
+  } catch (e) {
+    ElMessage.error(`加载配置失败: ${e.message || e}`)
+  }
 }
 
 async function createTaskStep() {
@@ -173,9 +177,14 @@ async function downloadBatch() {
 
 async function onDel(row) {
   await ElMessageBox.confirm(`确定删除任务「${row.name}」及全部结果？`, '删除', { type: 'warning' })
-  await deleteTask(row.id)
-  ElMessage.success('已删除')
-  await load()
+  try {
+    const res = await deleteTask(row.id)
+    if (!res?.success) return ElMessage.error(res?.detail || '删除失败')
+    ElMessage.success('已删除')
+    await load()
+  } catch (e) {
+    ElMessage.error(`删除失败: ${e.message || e}`)
+  }
 }
 
 onMounted(async () => { await load(); await loadConfig() })

@@ -84,5 +84,7 @@ async def get_scores(task_id: str, category: Optional[str] = None):
 @router.get("/{task_id}/details")
 async def get_details(task_id: str, model_key: Optional[str] = None, limit: int = 200, offset: int = 0):
     rows = await db.get_task_results(task_id, model_key)
-    rows = rows[offset: offset + limit]
-    return {"success": True, "data": rows}
+    total = len(rows)
+    items = rows[offset: offset + limit]
+    page = (offset // limit) + 1 if limit else 1
+    return {"success": True, "data": {"items": items, "total": total, "page": page, "page_size": limit}}

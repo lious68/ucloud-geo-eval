@@ -362,9 +362,14 @@ async def run_local_eval(
     await scheduler.run()
 
     # 补齐被跳过/失败的模型单元为空结果，保证评测覆盖完整
+    # per_model_questions 模式下每模型只补自己的题区间，避免产生幻影 failed 行
     for mk in model_keys:
         seen = {r["question_id"] for r in all_results[mk]}
-        for q in questions:
+        if per_model_questions:
+            model_qs = per_model_questions.get(mk, questions)
+        else:
+            model_qs = questions
+        for q in model_qs:
             if q["id"] not in seen:
                 all_results[mk].append(_empty_result(q["id"], mk, "WebChat 未配置登录状态 / 跳过"))
 

@@ -56,7 +56,9 @@ def main():
     r = client.get(f"/api/tasks/{task_id}/scores")
     assert r.status_code == 200 and len(r.json()["data"]) >= 1, r.text
     r = client.get(f"/api/tasks/{task_id}/details")
-    assert r.status_code == 200 and len(r.json()["data"]) >= 1, r.text
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["total"] >= 1, r.text
+    assert len(r.json()["data"]["items"]) >= 1, r.text
 
     print("✅ PASS: /api/tasks 全链路冒烟")
 

@@ -48,6 +48,12 @@ async def main():
     assert len(cfg["units"]) == 2
     assert cfg["units"][0]["question_ids"] == ["Q1", "Q2"]
 
+    # 2b. 建批次后、导入前：矩阵应已含批次模型，total_cells > 0，全 missing
+    pre_detail = await task_service.build_task_detail(task_id)
+    assert pre_detail["summary"]["total_cells"] > 0, "建批次后 total_cells 应 > 0"
+    assert pre_detail["summary"]["done_cells"] == 0
+    assert "deepseek" in pre_detail["coverage"] or "kimi" in pre_detail["coverage"]
+
     # 3. 第一次导入：deepseek Q1,Q2 done
     await task_service.import_batch_results(task_id, {
         "meta": {"task_id": task_id, "batch_id": cfg["batch_id"], "run_id": cfg["run_id"]},

@@ -211,7 +211,23 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in all_qids if qid in q_map]
 
-    total_cells = len(all_qids) * len(coverage)
+    # 模型集 = 已导入结果模型 ∪ 已下载批次模型（批次已下但未导入的模型也应显示为全 missing 行）
+    batch_models: List[str] = []
+    for b in batches:
+        for mk in (b.get("model_keys") or []):
+            if mk not in batch_models:
+                batch_models.append(mk)
+    matrix_models = list(coverage.keys())
+    for mk in batch_models:
+        if mk not in matrix_models:
+            matrix_models.append(mk)
+            coverage.setdefault(mk, {})
+    # 为每个矩阵模型补齐固定题集的 missing
+    for mk in matrix_models:
+        for qid in all_qids:
+            coverage[mk].setdefault(qid, "missing")
+
+    total_cells = len(all_qids) * len(matrix_models)
     done_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "done")
     return {
         "task": task,
@@ -234,7 +250,12 @@ async def build_task_list_summary() -> List[Dict]:
     for t in tasks:
         coverage = await db.get_task_coverage(t["id"])
         all_qids = t["question_ids"]
+        batches = await db.list_task_batches(t["id"])
         models = list(coverage.keys())
+        for b in batches:
+            for mk in (b.get("model_keys") or []):
+                if mk not in models:
+                    models.append(mk)
         total_cells = len(all_qids) * len(models)
         done_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "done")
         out.append({

@@ -2,6 +2,7 @@
 import json
 from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 import database as db
 from services.chart_builder import (
     build_radar_option, build_bar_option, build_coverage_option,
@@ -89,20 +90,25 @@ def _resolve_domain_label(url: str) -> str:
 
 
 @router.get("/{run_id}/scores")
-async def get_scores(run_id: str, category: str = None):
+async def get_scores(run_id: str, category: str = None, task_id: Optional[str] = None):
     """获取GEO评分"""
+    if task_id:
+        rows = await db.get_task_scores(task_id, category)
+        return {"success": True, "data": rows}
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")
-
     scores = await db.get_scores(run_id, category)
     return {"success": True, "data": scores}
 
 
 @router.get("/{run_id}/details")
 async def get_details(run_id: str, model_key: str = None, category: str = None,
-                      page: int = 1, page_size: int = 50):
+                      page: int = 1, page_size: int = 50, task_id: Optional[str] = None):
     """获取详细结果"""
+    if task_id:
+        rows = await db.get_task_results(task_id, model_key)
+        return {"success": True, "data": rows}
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")

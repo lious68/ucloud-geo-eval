@@ -51,10 +51,17 @@
 
       <!-- 评测时间 -->
       <div v-if="latestRun" class="run-breadcrumb">
-        <span>评测时间：</span>
-        <el-tag size="small" type="info">{{ formatRunTime(latestRun.completed_at || latestRun.started_at) }}</el-tag>
-        <el-tag v-if="latestRun.mode === 'webchat'" size="small" type="warning" style="margin-left:4px">🌐 WebChat</el-tag>
-        <el-button v-if="route.query.run_id" size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
+        <template v-if="route.query.task_id">
+          <span>任务：</span>
+          <el-tag size="small" type="success">{{ latestRun.name }}</el-tag>
+          <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.back()">← 返回任务详情</el-button>
+        </template>
+        <template v-else>
+          <span>评测时间：</span>
+          <el-tag size="small" type="info">{{ formatRunTime(latestRun.completed_at || latestRun.started_at) }}</el-tag>
+          <el-tag v-if="latestRun.mode === 'webchat'" size="small" type="warning" style="margin-left:4px">🌐 WebChat</el-tag>
+          <el-button v-if="route.query.run_id" size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
+        </template>
       </div>
 
       <!-- 核心指标卡片 -->
@@ -360,6 +367,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { useRoute } from 'vue-router'
 import { apiFetch } from '../composables/useWebSocket'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
 
@@ -479,6 +487,10 @@ function toggleAnswerExpand(questionId) {
 }
 
 async function openDrilldown(modelKey) {
+  if (route.query.task_id) {
+    ElMessage.info('任务级结果暂不支持问题下钻')
+    return
+  }
   drilldownModelKey.value = modelKey
   // 从 scores 中找到 model_name
   const s = scores.value.find(s => s.model_key === modelKey)
@@ -596,13 +608,17 @@ function renderChart(domRef, option) {
 async function loadData() {
   loading.value = true
   try {
-    // 优先使用 query param 中的 run_id（从历史页跳转过来）
+    const taskId = route.query.task_id || ''
     const queryRunId = route.query.run_id
     let runId = null
 
-    if (queryRunId) {
+    if (taskId) {
+      // 任务级模式：使用 task_id 查询
+      const taskRes = await apiFetch(`/tasks/${taskId}`)
+      latestRun.value = { id: taskId, name: taskRes.data?.task?.name || '任务结果' }
+      runId = '0'
+    } else if (queryRunId) {
       runId = queryRunId
-      // 补充 latestRun 信息
       const runRes = await apiFetch(`/evaluations/${runId}`)
       latestRun.value = runRes.data || null
     } else {
@@ -616,10 +632,16 @@ async function loadData() {
       runId = runs[0].id
     }
 
-    const scoresRes = await apiFetch(`/results/${runId}/scores`)
+    const scoresUrl = taskId
+      ? `/results/0/scores?task_id=${encodeURIComponent(taskId)}`
+      : `/results/${runId}/scores`
+    const scoresRes = await apiFetch(scoresUrl)
     scores.value = scoresRes.data || []
 
-    const chartsRes = await apiFetch(`/results/${runId}/charts`)
+    const chartsUrl = taskId
+      ? `/results/0/charts?task_id=${encodeURIComponent(taskId)}`
+      : `/results/${runId}/charts`
+    const chartsRes = await apiFetch(chartsUrl)
     charts.value = chartsRes.data || {}
 
     loading.value = false
@@ -630,21 +652,22 @@ async function loadData() {
     if (charts.value.coverage) renderChart(coverageRef.value, charts.value.coverage)
     if (charts.value.sentiment) renderChart(sentimentRef.value, charts.value.sentiment)
 
-    // 加载引用详情和渠道聚类（不阻塞主面板渲染）
-    try {
-      const citationsRes = await apiFetch(`/results/${runId}/citations`)
-      citationDetails.value = citationsRes.data || {}
-      // 默认展开第一个面板
-      const keys = Object.keys(citationDetails.value)
-      if (keys.length) activeCitationPanels.value = [keys[0]]
-    } catch (e) { console.warn('Citations load error:', e) }
+    if (!taskId) {
+      // 加载引用详情和渠道聚类（不阻塞主面板渲染）
+      try {
+        const citationsRes = await apiFetch(`/results/${runId}/citations`)
+        citationDetails.value = citationsRes.data || {}
+        const keys = Object.keys(citationDetails.value)
+        if (keys.length) activeCitationPanels.value = [keys[0]]
+      } catch (e) { console.warn('Citations load error:', e) }
 
-    try {
-      const channelsRes = await apiFetch(`/results/${runId}/citation-channels`)
-      channelClustering.value = channelsRes.data || {}
-      await nextTick()
-      renderChannelChart()
-    } catch (e) { console.warn('Citation channels load error:', e) }
+      try {
+        const channelsRes = await apiFetch(`/results/${runId}/citation-channels`)
+        channelClustering.value = channelsRes.data || {}
+        await nextTick()
+        renderChannelChart()
+      } catch (e) { console.warn('Citation channels load error:', e) }
+    }
   } catch (e) {
     console.error('Dashboard loadData error:', e)
     loading.value = false

@@ -86,6 +86,16 @@ async def main():
     scores = await db.get_task_scores(task_id)
     assert len(scores) >= 2, f"应有 2 个模型全局评分，实得 {len(scores)}"
 
+    # 6. 固定题集外的问题必须被丢弃
+    before = len(await db.get_task_results(task_id))
+    await task_service.import_batch_results(task_id, {
+        "meta": {"task_id": task_id, "batch_id": "batch_3", "run_id": "run_3"},
+        "questions": [],
+        "analysis_results": {"deepseek": [_mk("Q999", "deepseek", "out of set")]},
+    })
+    after = len(await db.get_task_results(task_id))
+    assert after == before, f"题集外的 Q999 不应入库: before={before} after={after}"
+
     print("✅ PASS: task_service 合并去重 + 矩阵 + 重算")
 
 

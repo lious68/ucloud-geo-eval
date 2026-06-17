@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
 import database as db
 from metrics import MetricsCalculator
+from analyzer import AnalysisResult
 
 
 def _new_id(prefix: str) -> str:
@@ -54,6 +55,11 @@ async def create_batch_config(task_id: str, model_keys: List[str],
     if not task:
         raise ValueError("任务不存在")
     total_qids = set(task["question_ids"])
+
+    # 校验 model_keys 中每个模型都有对应的题区间配置
+    for mk in model_keys:
+        if mk not in per_model_question_ids:
+            raise ValueError(f"模型 {mk} 缺少题区间配置")
 
     # 校验每模型题区间都是总题集子集
     for mk, qids in per_model_question_ids.items():
@@ -164,7 +170,6 @@ async def recalculate_task_scores(task_id: str) -> None:
 
 
 def _result_to_analysis(r: Dict):
-    from analyzer import AnalysisResult
     return AnalysisResult(
         question_id=r["question_id"], model_key=r["model_key"],
         model_name=r.get("model_name") or r["model_key"],
@@ -206,7 +211,7 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in all_qids if qid in q_map]
 
-    total_cells = len(all_qids) * max(len(coverage), 1)
+    total_cells = len(all_qids) * len(coverage)
     done_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "done")
     return {
         "task": task,
@@ -230,7 +235,7 @@ async def build_task_list_summary() -> List[Dict]:
         coverage = await db.get_task_coverage(t["id"])
         all_qids = t["question_ids"]
         models = list(coverage.keys())
-        total_cells = len(all_qids) * max(len(models), 1)
+        total_cells = len(all_qids) * len(models)
         done_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "done")
         out.append({
             **t,

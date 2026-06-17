@@ -250,6 +250,17 @@ CREATE TABLE IF NOT EXISTS task_units (
     PRIMARY KEY (run_id, model_key, question_id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_units_run_status ON task_units(run_id, status);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    question_ids  TEXT NOT NULL,
+    categories    TEXT DEFAULT '[]',
+    status        TEXT DEFAULT 'active',
+    notes         TEXT DEFAULT '',
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP
+);
 """
 
 
@@ -279,6 +290,13 @@ async def init_db():
             await _import_default_questions(db)
     finally:
         await db.close()
+
+
+async def column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
+    """判断某列是否已存在（ADD COLUMN 幂等前置检查）。"""
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    return any(r["name"] == column for r in rows)
 
 
 async def _migrate_add_columns(db: aiosqlite.Connection):
@@ -321,6 +339,24 @@ async def _migrate_add_columns(db: aiosqlite.Connection):
                 await db.commit()
     except Exception:
         pass
+
+    # tasks 改造：evaluation_runs / analysis_results / geo_scores 加 task_id, batch_id
+    for table, cols in [
+        ("evaluation_runs", [("task_id", "TEXT"), ("batch_id", "TEXT")]),
+        ("analysis_results", [("task_id", "TEXT"), ("batch_id", "TEXT")]),
+        ("geo_scores", [("task_id", "TEXT")]),
+    ]:
+        for col_name, col_type in cols:
+            if not await column_exists(db, table, col_name):
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                await db.commit()
+
+    # analysis_results 上 (task_id, model_key, question_id) 唯一索引（NULL task_id 行互异，不受约束）
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_task_model_q "
+        "ON analysis_results(task_id, model_key, question_id)"
+    )
+    await db.commit()
 
 
 async def _import_default_questions(db: aiosqlite.Connection):
@@ -908,4 +944,243 @@ async def count_task_units(run_id: str) -> Dict[str, int]:
     for r in rows:
         out[r["status"]] = r["c"]
     return out
+
+
+# ============================================================
+# Task 顶层（三级任务架构：任务 → 模型 → 问题）
+# ============================================================
+
+async def create_task(task_id: str, name: str, question_ids: List[str],
+                      categories: Optional[List[str]] = None) -> Dict:
+    """创建任务（固定总题集，创建时拍板）。"""
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO tasks (id, name, question_ids, categories, status) "
+            "VALUES (?, ?, ?, ?, 'active')",
+            (task_id, name, json.dumps(question_ids),
+             json.dumps(categories or []))
+        )
+        await db.commit()
+        return await get_task(task_id)
+    finally:
+        await db.close()
+
+
+async def get_task(task_id: str) -> Optional[Dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        t = dict(row)
+        t["question_ids"] = json.loads(t["question_ids"]) if isinstance(t["question_ids"], str) else t["question_ids"]
+        t["categories"] = json.loads(t["categories"]) if isinstance(t.get("categories"), str) else (t.get("categories") or [])
+        return t
+    finally:
+        await db.close()
+
+
+async def list_tasks(limit: int = 100, offset: int = 0) -> List[Dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+        for t in rows:
+            t["question_ids"] = json.loads(t["question_ids"]) if isinstance(t["question_ids"], str) else t["question_ids"]
+            t["categories"] = json.loads(t["categories"]) if isinstance(t.get("categories"), str) else (t.get("categories") or [])
+        return rows
+    finally:
+        await db.close()
+
+
+async def delete_task(task_id: str):
+    """级联删除 task + 其下批次 runs + results + scores。"""
+    db = await get_db()
+    try:
+        # 先删该 task 下的 analysis_results / geo_scores
+        await db.execute("DELETE FROM analysis_results WHERE task_id=?", (task_id,))
+        await db.execute("DELETE FROM geo_scores WHERE task_id=?", (task_id,))
+        # 删该 task 下的批次 run（先收 run_id 再删 results）
+        cur = await db.execute("SELECT id FROM evaluation_runs WHERE task_id=?", (task_id,))
+        run_ids = [r["id"] for r in await cur.fetchall()]
+        for rid in run_ids:
+            await db.execute("DELETE FROM analysis_results WHERE run_id=?", (rid,))
+            await db.execute("DELETE FROM geo_scores WHERE run_id=?", (rid,))
+        await db.execute("DELETE FROM evaluation_runs WHERE task_id=?", (task_id,))
+        await db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def add_task_batch(run_id: str, task_id: str, batch_id: str, name: str,
+                         model_keys: List[str], question_ids: List[str],
+                         per_model: Dict[str, List[str]], config: Optional[Dict] = None) -> Dict:
+    """在 task 下建一个下载批次（evaluation_runs 行，status='config_downloaded'）。"""
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO evaluation_runs
+               (id, name, status, model_keys, question_ids, total_questions, config, mode, task_id, batch_id)
+               VALUES (?, ?, 'config_downloaded', ?, ?, ?, ?, 'webchat', ?, ?)""",
+            (run_id, name, json.dumps(model_keys), json.dumps(question_ids),
+             sum(len(v) for v in per_model.values()), json.dumps(config or {}), task_id, batch_id)
+        )
+        await db.commit()
+        return await get_run(run_id)
+    finally:
+        await db.close()
+
+
+async def list_task_batches(task_id: str) -> List[Dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM evaluation_runs WHERE task_id=? ORDER BY started_at DESC, id DESC",
+            (task_id,)
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+        for r in rows:
+            r["model_keys"] = json.loads(r["model_keys"]) if isinstance(r["model_keys"], str) else r["model_keys"]
+            r["question_ids"] = json.loads(r["question_ids"]) if isinstance(r["question_ids"], str) else r["question_ids"]
+            r["config"] = json.loads(r["config"]) if isinstance(r.get("config"), str) else (r.get("config") or {})
+        return rows
+    finally:
+        await db.close()
+
+
+async def set_batch_status(run_id: str, status: str, completed: Optional[int] = None):
+    await update_run_status(run_id, status, completed)
+
+
+async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, result: Dict):
+    """按 (task_id, model_key, question_id) 去重覆盖插入。"""
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM analysis_results WHERE task_id=? AND model_key=? AND question_id=?",
+            (task_id, result["model_key"], result["question_id"])
+        )
+        await db.execute(
+            """INSERT INTO analysis_results
+               (run_id, task_id, batch_id, question_id, model_key, model_name,
+                ucloud_mentioned, ucloud_mention_count, ucloud_rank,
+                has_citation, citation_count, ucloud_recommended, recommendation_strength,
+                sentiment_score, sentiment_label, position_weight, response_length,
+                raw_content, competitor_mentions, error_message, citations, all_cited_urls)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, task_id, batch_id, result["question_id"], result["model_key"], result["model_name"],
+             int(result["ucloud_mentioned"]), result["ucloud_mention_count"], result.get("ucloud_rank"),
+             int(result["has_citation"]), result["citation_count"],
+             int(result["ucloud_recommended"]), result["recommendation_strength"],
+             result["sentiment_score"], result["sentiment_label"], result["position_weight"],
+             result["response_length"], result.get("raw_content", ""),
+             json.dumps(result.get("competitor_mentions", {}), ensure_ascii=False),
+             result.get("error_message"),
+             json.dumps(result.get("citations", []), ensure_ascii=False),
+             json.dumps(result.get("all_cited_urls", []), ensure_ascii=False))
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_task_results(task_id: str, model_key: Optional[str] = None) -> List[Dict]:
+    db = await get_db()
+    try:
+        query = "SELECT * FROM analysis_results WHERE task_id=?"
+        params = [task_id]
+        if model_key:
+            query += " AND model_key=?"
+            params.append(model_key)
+        cursor = await db.execute(query, params)
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_task_scores(task_id: str, category: Optional[str] = None) -> List[Dict]:
+    db = await get_db()
+    try:
+        query = "SELECT * FROM geo_scores WHERE task_id=?"
+        params = [task_id]
+        if category:
+            query += " AND category=?"
+            params.append(category)
+        else:
+            query += " AND category IS NULL"
+        cursor = await db.execute(query, params)
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def delete_task_geo_scores(task_id: str):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM geo_scores WHERE task_id=?", (task_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def save_task_geo_scores(task_id: str, model_key: str, model_name: str,
+                               category: Optional[str], scores: Dict):
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO geo_scores
+               (task_id, run_id, model_key, model_name, category,
+                geo_score, coverage_rate, mention_rate, citation_rate,
+                recommendation_rate, sentiment_score, avg_rank,
+                total_questions, valid_responses)
+               VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (task_id, model_key, model_name, category,
+             scores["geo_score"], scores["coverage_rate"], scores["mention_rate"],
+             scores["citation_rate"], scores["recommendation_rate"],
+             scores["sentiment_score"], scores["avg_rank"],
+             scores["total_questions"], scores["valid_responses"])
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_task_coverage(task_id: str) -> Dict:
+    """返回 {model_key: {question_id: 'done'|'failed'|'missing'}}。
+    done=有非空内容行；failed=有 error_message 行；missing=固定题集里没有的。"""
+    task = await get_task(task_id)
+    if not task:
+        return {}
+    all_qids = task["question_ids"]
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT model_key, question_id, raw_content, error_message FROM analysis_results WHERE task_id=?",
+            (task_id,)
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+    models = sorted({r["model_key"] for r in rows} | set())
+    coverage: Dict[str, Dict[str, str]] = {mk: {} for mk in models}
+    for r in rows:
+        mk, qid = r["model_key"], r["question_id"]
+        if r.get("error_message"):
+            coverage.setdefault(mk, {})[qid] = "failed"
+        elif r.get("raw_content"):
+            coverage.setdefault(mk, {})[qid] = "done"
+        else:
+            coverage.setdefault(mk, {})[qid] = "failed"
+    # 标 missing
+    for mk in list(coverage.keys()):
+        for qid in all_qids:
+            coverage[mk].setdefault(qid, "missing")
+    return coverage
 

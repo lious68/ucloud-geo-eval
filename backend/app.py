@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from database import init_db, verify_session
-from routers import evaluations, results, questions, settings, auth, webchat
+from routers import evaluations, results, questions, settings, auth, webchat, tasks
 
 
 # 需要鉴权的路径前缀
@@ -24,6 +24,7 @@ PROTECTED_PREFIXES = [
     "/api/evaluations",
     "/api/questions",
     "/api/webchat/auth",
+    "/api/tasks",
 ]
 # 不需要鉴权的路径
 PUBLIC_PATHS = [
@@ -35,7 +36,6 @@ PUBLIC_PATHS = [
     "/api/questions/types",
     "/api/webchat/auth/status",
     "/api/evaluations/ws/",     # WebSocket 连接：token 通过 query param 或初始消息验证
-    "/api/evaluations/import/", # 本地 WebChat 结果导入
     "/docs",
     "/openapi.json",
     "/redoc",
@@ -114,6 +114,7 @@ app.include_router(results.router)
 app.include_router(questions.router)
 app.include_router(settings.router)
 app.include_router(webchat.router)
+app.include_router(tasks.router)
 
 # 静态文件（Vue 构建产物）— 必须最后挂载
 frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

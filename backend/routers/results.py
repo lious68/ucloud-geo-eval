@@ -2,6 +2,7 @@
 import json
 from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 import database as db
 from services.chart_builder import (
     build_radar_option, build_bar_option, build_coverage_option,
@@ -89,20 +90,25 @@ def _resolve_domain_label(url: str) -> str:
 
 
 @router.get("/{run_id}/scores")
-async def get_scores(run_id: str, category: str = None):
+async def get_scores(run_id: str, category: str = None, task_id: Optional[str] = None):
     """获取GEO评分"""
+    if task_id:
+        rows = await db.get_task_scores(task_id, category)
+        return {"success": True, "data": rows}
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")
-
     scores = await db.get_scores(run_id, category)
     return {"success": True, "data": scores}
 
 
 @router.get("/{run_id}/details")
 async def get_details(run_id: str, model_key: str = None, category: str = None,
-                      page: int = 1, page_size: int = 50):
+                      page: int = 1, page_size: int = 50, task_id: Optional[str] = None):
     """获取详细结果"""
+    if task_id:
+        rows = await db.get_task_results(task_id, model_key)
+        return {"success": True, "data": rows}
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")
@@ -115,8 +121,35 @@ async def get_details(run_id: str, model_key: str = None, category: str = None,
 
 
 @router.get("/{run_id}/charts")
-async def get_charts(run_id: str):
+async def get_charts(run_id: str, task_id: Optional[str] = None):
     """获取图表配置JSON"""
+    if task_id:
+        scores = await db.get_task_scores(task_id)
+        import database as _db
+        db_conn = await _db.get_db()
+        try:
+            cursor = await db_conn.execute(
+                "SELECT * FROM geo_scores WHERE task_id=? AND category IS NOT NULL", (task_id,)
+            )
+            all_cat_scores = [dict(r) for r in await cursor.fetchall()]
+        finally:
+            await db_conn.close()
+        all_results = await db.get_task_results(task_id)
+        results_by_model = {}
+        for r in all_results:
+            mk = r["model_key"]
+            if mk not in results_by_model:
+                results_by_model[mk] = []
+            results_by_model[mk].append(r)
+        charts = {
+            "radar": build_radar_option(scores) if scores else {},
+            "bar": build_bar_option(scores) if scores else {},
+            "coverage": build_coverage_option(scores) if scores else {},
+            "sentiment": build_sentiment_option(results_by_model) if results_by_model else {},
+            "heatmap": build_heatmap_option(all_cat_scores) if all_cat_scores else {},
+        }
+        return {"success": True, "data": charts}
+
     run = await db.get_run(run_id)
     if not run:
         raise HTTPException(404, "评测不存在")

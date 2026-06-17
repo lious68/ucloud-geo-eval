@@ -106,6 +106,20 @@ class WeightsUpdate(BaseModel):
     sentiment_score: float = 0.10
 
 
+# ============ 三级任务（任务→模型→问题） ============
+
+class TaskCreate(BaseModel):
+    name: str = "GEO评估"
+    question_ids: Optional[List[str]] = None
+    categories: Optional[List[str]] = None
+
+
+class BatchCreate(BaseModel):
+    model_keys: List[str]
+    per_model_question_ids: Dict[str, List[str]]  # {model_key: [qid,...]}
+    delay: float = 8.0
+
+
 # ============ 本地结果导入 ============
 
 class LocalResultsImport(BaseModel):

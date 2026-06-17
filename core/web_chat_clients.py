@@ -147,6 +147,22 @@ class WebChatClientBase:
             text = await self._extract_response(self._page)
             logger.info(f"WebChat {self.model_key}: 响应完成，长度={len(text)}字")
 
+            # 封号信号检测：把分类结果编码进 error 文本，
+            # 交给 scheduler 统一处理（重试/冷却/跳过）。
+            # 用稳定的触发短语，确保 scheduler 端 classify_signal 能确定性分类。
+            from webchat_policy import classify_signal
+            sig = classify_signal(text)
+            if sig == "login_expired":
+                return {"model": self.model_key, "model_name": self.name, "content": "",
+                        "raw_response": None,
+                        "error": f"登录已过期（页面出现登录/验证信号）: {text[:160]}",
+                        "timestamp": ""}
+            if sig == "throttle":
+                return {"model": self.model_key, "model_name": self.name, "content": "",
+                        "raw_response": None,
+                        "error": f"请求频率过快，触发限流: {text[:160]}",
+                        "timestamp": ""}
+
             return {
                 "model": self.model_key,
                 "model_name": self.name,

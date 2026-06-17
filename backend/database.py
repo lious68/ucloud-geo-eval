@@ -231,6 +231,25 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- 三级任务架构：任务 → 模型 → 问题 单元表
+-- 每个 (run_id, model_key, question_id) 单元自带状态，是断点续跑的唯一事实来源。
+-- scheduler（core/scheduler.py）通过 core/task_units.SqliteUnitStore 落库；
+-- 此表也让 server 端可异步查询评测进度。
+CREATE TABLE IF NOT EXISTS task_units (
+    run_id      TEXT NOT NULL,
+    model_key   TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',   -- pending|running|done|failed|skipped
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT DEFAULT '',
+    content     TEXT DEFAULT '',
+    raw_response TEXT DEFAULT '',
+    model_name  TEXT DEFAULT '',
+    updated_at  TEXT DEFAULT '',
+    PRIMARY KEY (run_id, model_key, question_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_units_run_status ON task_units(run_id, status);
 """
 
 
@@ -836,3 +855,57 @@ async def backfill_citations(run_id: str) -> int:
         await db.close()
 
     return count
+
+
+# ============ 三级任务单元（task_units）============
+
+# 单元状态机与 schema 见 SCHEMA_SQL 末尾；落库主路径由 core/task_units.SqliteUnitStore
+# （同步 sqlite3）完成，这里提供 server 端异步查询的只读/统计接口。
+
+async def get_task_unit(run_id: str, model_key: str, question_id: str) -> Optional[Dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM task_units WHERE run_id=? AND model_key=? AND question_id=?",
+            (run_id, model_key, question_id),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_task_units(run_id: str, status: Optional[str] = None) -> List[Dict]:
+    db = await get_db()
+    try:
+        if status:
+            cursor = await db.execute(
+                "SELECT * FROM task_units WHERE run_id=? AND status=? ORDER BY question_id, model_key",
+                (run_id, status),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM task_units WHERE run_id=? ORDER BY question_id, model_key",
+                (run_id,),
+            )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def count_task_units(run_id: str) -> Dict[str, int]:
+    """按 status 统计单元数。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT status, COUNT(*) AS c FROM task_units WHERE run_id=? GROUP BY status",
+            (run_id,),
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    out = {"pending": 0, "running": 0, "done": 0, "failed": 0, "skipped": 0}
+    for r in rows:
+        out[r["status"]] = r["c"]
+    return out
+

@@ -161,177 +161,137 @@ async def _run_evaluation(
     mode: str = "api",
     enable_search: bool = False,
 ):
-    """执行评测的核心逻辑"""
+    """执行评测的核心逻辑（三级任务调度：任务 → 模型 → 问题）
+
+    复用 core/scheduler.EvalScheduler：
+      - 单元级持久化（task_units 表）+ 断点续跑
+      - 跨模型交错 + 逐模型限流配额 + 封号信号检测与自动退避 + 单题多次重试
+    本函数只负责：构造 client_factory、on_unit_done/on_progress 回调、运行后计算 geo_scores。
+    """
     logger.info(f"[EVAL {run_id}] Starting evaluation: mode={mode}, models={model_keys}, questions={len(questions)}")
     await update_run_status(run_id, "running")
     analyzer = ResponseAnalyzer()
     calculator = MetricsCalculator()
 
-    # WebChat 模式的浏览器客户端管理
-    webchat_clients: Dict[str, Any] = {}
-    if mode == "webchat":
-        logger.info(f"[EVAL {run_id}] WebChat mode: initializing browser clients for {model_keys}")
-        from web_chat_clients import create_web_chat_client
-        for mk in model_keys:
-            logger.info(f"[EVAL {run_id}] WebChat {mk}: creating client...")
-            client = create_web_chat_client(mk)
-            if not client.is_configured:
-                logger.warning(f"[EVAL {run_id}] WebChat {mk}: 无认证状态，跳过")
-                continue
-            logger.info(f"[EVAL {run_id}] WebChat {mk}: launching browser...")
-            initialized = await client.initialize()
-            if not initialized:
-                logger.warning(f"[EVAL {run_id}] WebChat {mk}: 浏览器启动失败，跳过")
-                continue
-            logger.info(f"[EVAL {run_id}] WebChat {mk}: browser ready")
-            webchat_clients[mk] = client
+    from scheduler import EvalScheduler
+    from task_units import SqliteUnitStore
+    from webchat_policy import get_model_policy
+    import os as _os
 
-    total = len(questions) * len(model_keys)
-    logger.info(f"[EVAL {run_id}] Total tasks: {total} ({len(questions)} questions × {len(model_keys)} models)")
-    completed = 0
+    # 单元存储：与 evaluation_runs 同库（data/geo.db）
+    _db_path = _os.path.join(_os.path.dirname(__file__), "..", "data", "geo.db")
+    store = SqliteUnitStore(_db_path)
 
-    # 按模型分组的结果
+    # 按模型分组的结果（供 geo_scores 计算；on_unit_done 填充）
     all_results: Dict[str, List] = {mk: [] for mk in model_keys}
+    _q_map = {q["id"]: q for q in questions}
+    completed = 0
+    total = len(questions) * len(model_keys)
+
+    # ---- 回调 ----
+    async def on_unit_done(unit, response):
+        nonlocal completed
+        content = response.get("content", "")
+        error = response.get("error")
+        model_name = unit.model_name or response.get("model_name") or unit.model_key
+        # 保留远端的 search_results 特性（API 路径合并返回的引用来源）
+        analysis = analyzer.analyze(
+            question_id=unit.question_id,
+            model_key=unit.model_key,
+            model_name=model_name,
+            content=content,
+            error=error,
+            search_results=response.get("search_results"),
+        )
+        result_dict = _analysis_to_dict(analysis)
+        await save_analysis_result(run_id, result_dict)
+        all_results[unit.model_key].append(result_dict)
+        completed += 1
+        await update_run_status(run_id, "running", completed)
+
+    async def on_progress(event):
+        etype = event.get("type")
+        if ws_manager and etype == "progress":
+            # 沿用前端既有进度协议
+            await ws_manager.broadcast(run_id, {
+                "type": "progress",
+                "run_id": run_id,
+                "completed": event.get("completed", completed),
+                "total": event.get("total", total),
+                "counts": event.get("counts"),
+            })
+        elif ws_manager and etype in ("model_skipped", "throttled"):
+            logger.info(f"[EVAL {run_id}] {etype}: {event}")
+
+    # ---- 客户端工厂（webchat / api 各一）----
+    async def client_factory_webchat(mk):
+        from web_chat_clients import create_web_chat_client
+        return create_web_chat_client(mk)
+
+    async def client_factory_api(mk):
+        return await _create_model_client(mk, temperature)
+
+    client_factory = client_factory_webchat if mode == "webchat" else client_factory_api
+
+    # ---- 逐模型策略：用户 delay 与平台保护 delay 取较大者，绝不缩小 DeepSeek 间隔 ----
+    extra_policy: Dict[str, dict] = {}
+    for mk in model_keys:
+        pol = get_model_policy(mk)
+        if delay and delay > 0:
+            extra_policy[mk] = {"inter_unit_delay": max(pol.get("inter_unit_delay", 0), float(delay))}
+
+    scheduler = EvalScheduler(
+        run_id=run_id,
+        models=model_keys,
+        questions=questions,
+        store=store,
+        client_factory=client_factory,
+        on_unit_done=on_unit_done,
+        on_progress=on_progress,
+        extra_policy=extra_policy,
+    )
 
     try:
+        # 运行调度（webchat 浏览器由各 worker 在 client_factory 内初始化/关闭）
+        await scheduler.run()
+
+        # 补齐被跳过（未配置/登录失效）的模型单元为空结果，保证评测覆盖完整
         for mk in model_keys:
-            # WebChat 模式：使用浏览器客户端
-            if mode == "webchat" and mk in webchat_clients:
-                wc_client = webchat_clients[mk]
-                for q in questions:
-                    try:
-                        # 让出控制权，使 CancelledError 能被及时响应
-                        await asyncio.sleep(0)
-
-                        response = await wc_client.chat(q["question"])
-
-                        analysis = analyzer.analyze(
-                            question_id=q["id"],
-                            model_key=mk,
-                            model_name=wc_client.name,
-                            content=response.get("content", ""),
-                            error=response.get("error"),
-                        )
-
-                        result_dict = _analysis_to_dict(analysis)
-                        await save_analysis_result(run_id, result_dict)
-                        all_results[mk].append(result_dict)
-
-                    except Exception as e:
-                        logger.error(f"WebChat error querying {mk} for {q['id']}: {e}")
-                        result_dict = _empty_result(q["id"], mk, str(e))
-                        await save_analysis_result(run_id, result_dict)
-                        all_results[mk].append(result_dict)
-
+            seen = {r["question_id"] for r in all_results[mk]}
+            for q in questions:
+                if q["id"] not in seen:
+                    reason = ("WebChat 未配置登录状态" if mode == "webchat"
+                              else "API key not configured / skipped")
+                    rd = _empty_result(q["id"], mk, reason)
+                    await save_analysis_result(run_id, rd)
+                    all_results[mk].append(rd)
                     completed += 1
-                    await update_run_status(run_id, "running", completed)
 
-                    if ws_manager:
-                        await ws_manager.broadcast(run_id, {
-                            "type": "progress",
-                            "run_id": run_id,
-                            "completed": completed,
-                            "total": total,
-                            "current_model": mk,
-                            "current_question": q["id"],
-                        })
-
-                    if delay > 0:
-                        await asyncio.sleep(delay)
-
-            elif mode == "webchat" and mk not in webchat_clients:
-                # 无认证状态的模型，跳过
-                for q in questions:
-                    result_dict = _empty_result(q["id"], mk, "WebChat 未配置登录状态")
-                    await save_analysis_result(run_id, result_dict)
-                    all_results[mk].append(result_dict)
-                    completed += 1
-                continue
-
-            else:
-                # API 模式：使用 OpenAI 兼容客户端
-                client = await _create_model_client(mk, temperature)
-                if not client or not client.is_configured:
-                    # 跳过不可用的模型
-                    for q in questions:
-                        result_dict = _empty_result(q["id"], mk, "API key not configured")
-                        await save_analysis_result(run_id, result_dict)
-                        all_results[mk].append(result_dict)
-                        completed += 1
-                    continue
-
-                for q in questions:
-                    try:
-                        # 让出控制权，使 CancelledError 能被及时响应
-                        await asyncio.sleep(0)
-
-                        # 发送请求（传递 enable_search 参数）
-                        response = client.chat(q["question"], enable_search=enable_search)
-
-                        # 分析响应（传递 search_results 以合并 API 返回的引用来源）
-                        analysis = analyzer.analyze(
-                            question_id=q["id"],
-                            model_key=mk,
-                            model_name=client.name,
-                            content=response.get("content", ""),
-                            error=response.get("error"),
-                            search_results=response.get("search_results"),
-                        )
-
-                        result_dict = _analysis_to_dict(analysis)
-                        await save_analysis_result(run_id, result_dict)
-                        all_results[mk].append(result_dict)
-
-                    except Exception as e:
-                        logger.error(f"Error querying {mk} for {q['id']}: {e}")
-                        result_dict = _empty_result(q["id"], mk, str(e))
-                        await save_analysis_result(run_id, result_dict)
-                        all_results[mk].append(result_dict)
-
-                completed += 1
-                await update_run_status(run_id, "running", completed)
-
-                # WebSocket 推送进度
-                if ws_manager:
-                    await ws_manager.broadcast(run_id, {
-                        "type": "progress",
-                        "run_id": run_id,
-                        "completed": completed,
-                        "total": total,
-                        "current_model": mk,
-                        "current_question": q["id"],
-                    })
-
-                # 计算GEO评分
+        # 计算 GEO 评分（与落库顺序无关）
         for mk in model_keys:
             if not all_results[mk]:
                 continue
 
             # 全局评分：提及率/TOP3 仅统计自然问题；引用率/情感值统计全部有效问题
-            from analyzer import AnalysisResult
             results = [_dict_to_analysis(r) for r in all_results[mk]]
-            scores = calculator.calculate_scores(results)
+            scores = calculator.calculate_scores(results, questions=questions)
             scores_dict = _scores_to_dict(scores)
-            model_name = results[0].model_name if results else (all_results[mk][0].get("model_name") if all_results[mk] else mk)
+            model_name = results[0].model_name if results else mk
             await save_geo_scores(run_id, mk, model_name, None, scores_dict)
 
             # 品类评分
             categories = {}
             for r in all_results[mk]:
                 qid = r["question_id"]
-                for q in questions:
-                    if q["id"] == qid:
-                        cat = q["category"]
-                        if cat not in categories:
-                            categories[cat] = []
-                        categories[cat].append(r)
-                        break
+                q = _q_map.get(qid)
+                if q:
+                    categories.setdefault(q["category"], []).append(r)
 
             for cat, cat_results in categories.items():
                 cat_analysis = [_dict_to_analysis(r) for r in cat_results]
-                cat_scores = calculator.calculate_scores(cat_analysis)
-                cat_dict = _scores_to_dict(cat_scores)
-                await save_geo_scores(run_id, mk, model_name, cat, cat_dict)
+                cat_questions = [q for q in questions if q.get("category") == cat]
+                cat_scores = calculator.calculate_scores(cat_analysis, questions=cat_questions)
+                await save_geo_scores(run_id, mk, model_name, cat, _scores_to_dict(cat_scores))
 
         await update_run_status(run_id, "completed", completed)
 
@@ -361,11 +321,10 @@ async def _run_evaluation(
             })
 
     finally:
-        # 关闭 WebChat 浏览器
-        if mode == "webchat":
-            for mk, wc_client in webchat_clients.items():
-                await wc_client.close()
-            logger.info("WebChat browsers closed")
+        # 浏览器由各 worker 在 client_factory→scheduler 内自行关闭；
+        # 这里仅兜底记录。
+        logger.info(f"[EVAL {run_id}] finished, completed={completed}/{total}")
+
 
 
 async def _create_model_client(model_key: str, temperature: float = 0.7) -> Optional[ModelClient]:

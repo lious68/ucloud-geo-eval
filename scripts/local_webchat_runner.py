@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -34,6 +35,10 @@ MODEL_NAMES = {
     "kimi": "Kimi",
     "qwen": "千问",
 }
+
+# 本地任务单元库 + 清单目录（断点续跑用）
+LOCAL_RUNS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "local_runs")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
 
 
 def _setup_headed_mode(headed: bool):
@@ -60,6 +65,9 @@ from analyzer import ResponseAnalyzer
 from metrics import MetricsCalculator
 from analyzer import AnalysisResult
 from database import get_questions as db_get_questions
+from scheduler import EvalScheduler
+from task_units import SqliteUnitStore
+from webchat_policy import get_model_policy
 
 
 def _analysis_to_dict(a) -> Dict:
@@ -157,196 +165,45 @@ def _dict_to_analysis(d: Dict):
 
 # ── 主逻辑 ──
 
-async def run_local_eval(
-    model_keys: List[str],
-    question_ids: Optional[List[str]] = None,
-    categories: Optional[List[str]] = None,
-    delay: float = 8.0,
-    output_path: str = "local_results.json",
-    questions: Optional[List[Dict]] = None,
-):
-    """执行本地 WebChat 评测
+def _new_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
 
-    Args:
-        questions: 预加载的问题列表（--config 模式下从配置文件直接传入）
-    """
 
-    print(SEP)
-    print("  UCloud GEO — 本地 Playwright WebChat Runner")
-    print(SEP)
-    print(f"  模型: {', '.join(model_keys)}")
-    print(f"  输出: {output_path}")
-    print(f"  延迟: {delay}s")
-    print()
+def _save_manifest(run_id: str, name: str, model_keys: List[str],
+                   questions: List[Dict], delay: float, output_path: str) -> str:
+    """保存任务清单（断点续跑所需：问题集 + 模型 + 参数）。"""
+    os.makedirs(LOCAL_RUNS_DIR, exist_ok=True)
+    path = os.path.join(LOCAL_RUNS_DIR, f"{run_id}.manifest.json")
+    manifest = {
+        "run_id": run_id, "name": name, "model_keys": model_keys,
+        "delay": delay, "output_path": output_path, "questions": questions,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    return path
 
-    # 1. 获取问题列表
-    print("[1/5] 加载问题列表...")
-    if questions:
-        # 从配置文件直接传入（--config 模式）
-        print("  来源: 任务配置文件")
-        if question_ids:
-            questions = [q for q in questions if q["id"] in question_ids]
-        if categories:
-            questions = [q for q in questions if q["category"] in categories]
-    else:
-        questions = await _load_questions(question_ids, categories)
-    if not questions:
-        print("  错误: 没有可评估的问题")
-        return
-    print(f"  加载 {len(questions)} 个问题")
 
-    # 2. 初始化浏览器客户端
-    print("[2/5] 初始化 WebChat 客户端...")
-    clients = {}
-    for mk in model_keys:
-        print(f"  初始化 {MODEL_NAMES.get(mk, mk)} ({mk})...")
-        client = create_web_chat_client(mk)
-        if not client.is_configured:
-            print(f"    ⚠️ 无认证状态，跳过 (需先运行 setup_webchat_auth.py 登录)")
-            continue
-        ok = await client.initialize()
-        if not ok:
-            print(f"    ⚠️ 浏览器启动失败，跳过")
-            continue
-        print(f"    ✅ 浏览器就绪")
-        clients[mk] = client
+def _load_manifest(run_id: str) -> Optional[Dict]:
+    path = os.path.join(LOCAL_RUNS_DIR, f"{run_id}.manifest.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    if not clients:
-        print("  错误: 没有可用的 WebChat 客户端")
-        return
-    print(f"  可用: {', '.join(MODEL_NAMES.get(k, k) for k in clients)}")
 
-    # 3. 执行评测 — 多模型并发
-    print("[3/5] 开始评测...")
-    analyzer = ResponseAnalyzer()
-    calculator = MetricsCalculator()
-    total = len(questions) * len([mk for mk in model_keys if mk in clients])
-    all_results: Dict[str, List] = {mk: [] for mk in model_keys}
-
-    # 全局计数器（多模型并发时共享）
-    completed_lock = asyncio.Lock()
-    completed = [0]  # 用列表实现可变计数
-
-    async def eval_single_model(mk: str, client, model_name: str, questions: List[Dict]):
-        """单个模型的评测协程"""
-        results = []
-        print(f"\n  --- {model_name} 开始 ---")
-        for q in questions:
-            qid = q["id"]
-            try:
-                response = await client.chat(q["question"])
-                if response.get("error"):
-                    async with completed_lock:
-                        completed[0] += 1
-                        c = completed[0]
-                    print(f"    [{c}/{total}] {mk}:{qid} ❌ {response['error'][:80]}")
-                    result = _empty_result(qid, mk, response["error"])
-                else:
-                    content = response.get("content", "")
-                    analysis = analyzer.analyze(
-                        question_id=qid,
-                        model_key=mk,
-                        model_name=model_name,
-                        content=content,
-                        error=response.get("error"),
-                    )
-                    result = _analysis_to_dict(analysis)
-                    async with completed_lock:
-                        completed[0] += 1
-                        c = completed[0]
-                    ucloud = "✅" if analysis.ucloud_mentioned else "—"
-                    cit = f"📎{analysis.citation_count}" if analysis.has_citation else ""
-                    rec = f"⭐{analysis.ucloud_recommendation_strength}" if analysis.ucloud_recommended else ""
-                    print(f"    [{c}/{total}] {mk}:{qid} {ucloud} {cit} {rec} ({len(content)}字)")
-            except Exception as e:
-                async with completed_lock:
-                    completed[0] += 1
-                    c = completed[0]
-                print(f"    [{c}/{total}] {mk}:{qid} ❌ {str(e)[:80]}")
-                result = _empty_result(qid, mk, str(e))
-
-            results.append(result)
-
-            if delay > 0:
-                await asyncio.sleep(delay)
-
-        print(f"  --- {model_name} 完成 ({len(results)}条) ---")
-        return mk, results
-
-    # 并发执行所有模型
-    tasks = []
-    for mk in model_keys:
-        client = clients.get(mk)
-        model_name = MODEL_NAMES.get(mk, mk)
-        if client:
-            tasks.append(eval_single_model(mk, client, model_name, questions))
-        else:
-            # 无认证的模型，直接生成空结果
-            for q in questions:
-                all_results[mk].append(_empty_result(q["id"], mk, "WebChat 未配置登录状态"))
-            async with completed_lock:
-                completed[0] += len(questions)
-
-    if tasks:
-        results_list = await asyncio.gather(*tasks, return_exceptions=True)
-        for item in results_list:
-            if isinstance(item, Exception):
-                print(f"  ⚠️ 模型评测异常: {item}")
-            else:
-                mk, results = item
-                all_results[mk] = results
-
-    # 4. 计算评分
-    print("\n[4/5] 计算 GEO 评分...")
-    geo_scores: Dict[str, Dict[str, Any]] = {}  # mk -> {None: scores, "category": scores}
-
-    for mk in model_keys:
-        if not all_results[mk]:
-            continue
-
-        model_name = MODEL_NAMES.get(mk, mk)
-        results = [_dict_to_analysis(r) for r in all_results[mk]]
-        scores = calculator.calculate_scores(results, questions=questions)
-        geo_scores[mk] = {None: _scores_to_dict(scores)}
-
-        print(f"  {model_name}: GEO={scores.geo_score:.1f} "
-              f"提及率={scores.coverage_rate:.2f} "
-              f"引用率={scores.citation_rate:.2f} "
-              f"TOP3推荐率={scores.recommendation_rate:.2f} "
-              f"情感值={scores.sentiment_score:.2f}")
-
-        # 按品类计算
-        categories_map = {}
-        for r in all_results[mk]:
-            qid = r["question_id"]
-            for q in questions:
-                if q["id"] == qid:
-                    cat = q["category"]
-                    categories_map.setdefault(cat, []).append(r)
-                    break
-
-        for cat, cat_results in categories_map.items():
-            cat_analysis = [_dict_to_analysis(r) for r in cat_results]
-            cat_questions = [q for q in questions if q.get("category") == cat]
-            cat_scores = calculator.calculate_scores(cat_analysis, questions=cat_questions)
-            geo_scores[mk][cat] = _scores_to_dict(cat_scores)
-
-    # 5. 导出结果
-    print("\n[5/5] 导出结果...")
-
+def _build_output(run_id, model_keys, questions, all_results, geo_scores) -> Dict:
     # 修复 geo_scores 中的 None 键（JSON 序列化时会变成字符串 "null"）
     fixed_geo_scores = {}
     for mk, scores_by_cat in geo_scores.items():
         fixed_geo_scores[mk] = {}
         for cat, scores in scores_by_cat.items():
-            # 使用特殊标记，导入时再转回 None
             cat_key = cat if cat is not None else "__GLOBAL__"
             fixed_geo_scores[mk][cat_key] = scores
-
-    output = {
+    return {
         "meta": {
             "generated_at": datetime.now().isoformat(),
             "mode": "webchat_local",
+            "run_id": run_id,
             "model_keys": model_keys,
             "total_questions": len(questions),
             "total_results": sum(len(v) for v in all_results.values()),
@@ -356,17 +213,188 @@ async def run_local_eval(
         "geo_scores": fixed_geo_scores,
     }
 
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
 
+def _write_json(path: str, data: Dict) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+async def run_local_eval(
+    model_keys: List[str],
+    question_ids: Optional[List[str]] = None,
+    categories: Optional[List[str]] = None,
+    delay: float = 8.0,
+    output_path: str = "local_results.json",
+    questions: Optional[List[Dict]] = None,
+    run_id: Optional[str] = None,
+    resume: bool = False,
+    name: str = "GEO评估",
+):
+    """执行本地 WebChat 评测（三级任务调度：任务 → 模型 → 问题）
+
+    - 单元级持久化（data/local_runs/<run_id>.db）+ 断点续跑
+    - 每单元 done 即增量写 output/<run_id>.partial.json，崩溃不丢已完成题
+    - resume=True 时从已存在的 run_id 恢复，跳过 done，仅补跑 pending/failed
+    """
+    # ── 恢复模式：从清单重建问题集与参数 ──
+    if resume and run_id:
+        manifest = _load_manifest(run_id)
+        if not manifest:
+            print(f"  错误: 找不到 run_id={run_id} 的清单，无法恢复")
+            return
+        model_keys = manifest["model_keys"]
+        questions = manifest["questions"]
+        delay = manifest.get("delay", delay)
+        output_path = manifest.get("output_path", output_path)
+        name = manifest.get("name", name)
+        print(f"  ♻️  恢复模式: run_id={run_id}")
+
+    print(SEP)
+    print("  UCloud GEO — 本地 Playwright WebChat Runner")
+    print(SEP)
+    print(f"  模型: {', '.join(model_keys)}")
+    print(f"  输出: {output_path}")
+    print(f"  延迟: {delay}s（与平台保护间隔取较大者）")
+    print()
+
+    # 1. 获取问题列表
+    print("[1/5] 加载问题列表...")
+    if not questions:
+        questions = await _load_questions(question_ids, categories)
+        if question_ids:
+            questions = [q for q in questions if q["id"] in question_ids]
+        if categories:
+            questions = [q for q in questions if q["category"] in categories]
+    if not questions:
+        print("  错误: 没有可评估的问题")
+        return
+    print(f"  加载 {len(questions)} 个问题")
+
+    # 2. 生成/复用 run_id + 单元库 + 清单
+    if not run_id:
+        run_id = _new_run_id()
+    print(f"[2/5] 任务 run_id = {run_id}")
+    store = SqliteUnitStore(os.path.join(LOCAL_RUNS_DIR, f"{run_id}.db"))
+    if not resume:
+        _save_manifest(run_id, name, model_keys, questions, delay, output_path)
+
+    partial_path = os.path.join(OUTPUT_DIR, f"{run_id}.partial.json")
+
+    analyzer = ResponseAnalyzer()
+    calculator = MetricsCalculator()
+    all_results: Dict[str, List] = {mk: [] for mk in model_keys}
+    _q_map = {q["id"]: q for q in questions}
+    total = len(questions) * len(model_keys)
+
+    # 若恢复，先把已 done 的单元回填进 all_results（用 store 里的 content 重算）
+    if resume:
+        for u in store.list_units(run_id, "done"):
+            analysis = analyzer.analyze(
+                question_id=u.question_id, model_key=u.model_key,
+                model_name=u.model_name or MODEL_NAMES.get(u.model_key, u.model_key),
+                content=u.content or "", error=None,
+            )
+            all_results[u.model_key].append(_analysis_to_dict(analysis))
+        print(f"  恢复: 已完成 {sum(len(v) for v in all_results.values())} 个单元，仅补跑剩余")
+
+    # 3. 回调
+    def _dump_partial():
+        out = _build_output(run_id, model_keys, questions, all_results, {})
+        _write_json(partial_path, out)
+
+    async def on_unit_done(unit, response):
+        content = response.get("content", "")
+        error = response.get("error")
+        model_name = unit.model_name or MODEL_NAMES.get(unit.model_key, unit.model_key)
+        analysis = analyzer.analyze(
+            question_id=unit.question_id, model_key=unit.model_key,
+            model_name=model_name, content=content, error=error,
+        )
+        result = _analysis_to_dict(analysis)
+        # 去重：同一 (model,question) 保留最新（重试成功时覆盖旧的失败记录）
+        arr = all_results[unit.model_key]
+        arr = [r for r in arr if r["question_id"] != unit.question_id]
+        arr.append(result)
+        all_results[unit.model_key] = arr
+        _dump_partial()  # 增量写盘：崩溃也不丢
+        c = sum(len(v) for v in all_results.values())
+        ucloud = "✅" if analysis.ucloud_mentioned else "—"
+        cit = f"📎{analysis.citation_count}" if analysis.has_citation else ""
+        rec = f"⭐{analysis.ucloud_recommendation_strength}" if analysis.ucloud_recommended else ""
+        mark = "❌" if error else ""
+        print(f"    [{c}/{total}] {unit.model_key}:{unit.question_id} {ucloud} {cit} {rec} {mark}"
+              f"{(' '+error[:60]) if error else ''}")
+
+    async def on_progress(event):
+        if event.get("type") == "throttled":
+            print(f"    ⚠️ {event['model_key']} 触发限流，进入长冷却后重试")
+        elif event.get("type") == "model_skipped":
+            print(f"    ⛔ {event.get('model_key')} 跳过（{event.get('reason')}）")
+
+    # 客户端工厂：浏览器由 scheduler worker 内部初始化/关闭
+    async def client_factory(mk):
+        return create_web_chat_client(mk)
+
+    # 逐模型策略：用户 delay 与平台保护 delay 取较大者
+    extra_policy = {}
+    for mk in model_keys:
+        pol = get_model_policy(mk)
+        if delay and delay > 0:
+            extra_policy[mk] = {"inter_unit_delay": max(pol.get("inter_unit_delay", 0), float(delay))}
+
+    # 4. 执行调度
+    print("[3/5] 开始评测（跨模型交错 + 逐模型限流 + 单题重试 + 封号退避）...")
+    scheduler = EvalScheduler(
+        run_id=run_id, models=model_keys, questions=questions, store=store,
+        client_factory=client_factory, on_unit_done=on_unit_done, on_progress=on_progress,
+        extra_policy=extra_policy,
+    )
+    await scheduler.run()
+
+    # 补齐被跳过/失败的模型单元为空结果，保证评测覆盖完整
+    for mk in model_keys:
+        seen = {r["question_id"] for r in all_results[mk]}
+        for q in questions:
+            if q["id"] not in seen:
+                all_results[mk].append(_empty_result(q["id"], mk, "WebChat 未配置登录状态 / 跳过"))
+
+    # 5. 计算评分
+    print("\n[4/5] 计算 GEO 评分...")
+    geo_scores: Dict[str, Dict[str, Any]] = {}
+    for mk in model_keys:
+        if not all_results[mk]:
+            continue
+        model_name = MODEL_NAMES.get(mk, mk)
+        results = [_dict_to_analysis(r) for r in all_results[mk]]
+        scores = calculator.calculate_scores(results, questions=questions)
+        geo_scores[mk] = {None: _scores_to_dict(scores)}
+        print(f"  {model_name}: GEO={scores.geo_score:.1f} "
+              f"覆盖={scores.coverage_rate:.2f} "
+              f"引用={scores.citation_rate:.2f} "
+              f"推荐={scores.recommendation_rate:.2f}")
+        categories_map = {}
+        for r in all_results[mk]:
+            q = _q_map.get(r["question_id"])
+            if q:
+                categories_map.setdefault(q["category"], []).append(r)
+        for cat, cat_results in categories_map.items():
+            cat_questions = [q for q in questions if q.get("category") == cat]
+            cat_scores = calculator.calculate_scores([_dict_to_analysis(r) for r in cat_results],
+                                                    questions=cat_questions)
+            geo_scores[mk][cat] = _scores_to_dict(cat_scores)
+
+    print("\n[5/5] 导出结果...")
+    output = _build_output(run_id, model_keys, questions, all_results, geo_scores)
+    _write_json(output_path, output)
     print(f"  ✅ 结果已保存: {output_path}")
     print(f"  文件大小: {os.path.getsize(output_path) / 1024:.1f} KB")
-
-    # 关闭浏览器
-    print("\n关闭浏览器...")
-    for mk, client in clients.items():
-        await client.close()
+    # 清理 partial
+    try:
+        if os.path.exists(partial_path):
+            os.remove(partial_path)
+    except OSError:
+        pass
     print("完成。")
 
 
@@ -458,8 +486,21 @@ def main():
         "--inline-questions", "-Q",
         help='直接传入问题文本，用 || 分隔（不需要数据库），如 --inline-questions "什么是云计算？||推荐什么云服务？"',
     )
+    parser.add_argument(
+        "--resume",
+        help="断点续跑：传入之前的 run_id，跳过已完成单元，仅补跑 pending/failed",
+    )
 
     args = parser.parse_args()
+
+    # 断点续跑：直接从清单恢复，忽略其它参数
+    if args.resume:
+        _setup_headed_mode(args.headed)
+        asyncio.run(run_local_eval(
+            model_keys=[], output_path="", delay=0.0,
+            run_id=args.resume, resume=True,
+        ))
+        return
 
     # 设置浏览器显示模式（必须在 import web_chat_clients 之前）
     _setup_headed_mode(args.headed)
@@ -471,6 +512,7 @@ def main():
     model_keys = args.models or ["kimi"]
     delay = args.delay if args.delay is not None else 8.0
     output_path = args.output
+    task_name = "GEO评估"
 
     if args.config:
         # 从配置文件加载（云联动模式）
@@ -490,6 +532,8 @@ def main():
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in task_name)
             output_path = f"output/webchat_{safe_name}_{timestamp}.json"
+        else:
+            task_name = config["task"].get("name", "GEO评估")
 
         print(f"  任务: {config['task'].get('name', 'N/A')}")
         print(f"  模型: {', '.join(model_keys)}")
@@ -524,6 +568,7 @@ def main():
         delay=delay,
         output_path=output_path,
         questions=preloaded_questions,
+        name=task_name,
     ))
 
 

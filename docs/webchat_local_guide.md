@@ -151,3 +151,45 @@ python scripts/webchat_run.py --models kimi ernie
 # 从配置文件运行
 python scripts/webchat_run.py --config task.json
 ```
+
+## 三级任务架构：任务 → 模型 → 问题
+
+为应对 DeepSeek 等平台「连续问询超过约 25 次即封号」，runner 已接入三级任务调度引擎（`core/scheduler.py`，server 与本地共用）：
+
+```
+Task (一次评测，对应一个 run_id)
+  └─ Unit (run_id, model_key, question_id)  ← 唯一事实来源，自带 status
+        └─ Scheduler：跨模型交错 + 逐模型限流 + 单题重试 + 封号退避
+```
+
+### 防封号三策并用
+
+1. **跨模型交错**：每模型一个并发 worker，按问题顺序推进，自然交错各平台请求。
+2. **逐模型限流配额**（`core/webchat_policy.py` 的 `MODEL_POLICY`）：
+   - `max_consecutive` 突发上限，达到后强制 `burst_cooldown`；
+   - 滑动窗口 `rate_max` / `rate_window_sec`（DeepSeek 默认 ≤20 次/小时）；
+   - `inter_unit_delay` 相邻请求最小间隔。
+   - DeepSeek 已收紧：突发 15、每小时 20、封号冷却 1800s。
+3. **封号信号检测 + 自动退避**：页面/错误出现「频率过快/登录已过期」等信号时——限流类→长冷却后单元退回 `pending` 重试；登录失效→该模型剩余单元 `skipped`（需人工重登）。
+4. **单题多次重试**：瞬态错误（超时/空响应/提取失败）指数退避 + 抖动重试，超 `max_attempts` 落 `failed`。
+
+> `analysis_results` 唯一性靠 `(run_id, question_id, model_key)` 三元组，GEO 评分计算不依赖落库顺序——所以交错执行对最终评分零影响。
+
+### 断点续跑（零中断）
+
+- 每个单元状态持久化到 `data/local_runs/<run_id>.db`；
+- 每完成一题即增量写 `output/<run_id>.partial.json`，**崩溃也不丢已完成题**；
+- 中断后用同一 `run_id` 恢复，自动跳过 `done`，仅补跑 `pending/failed`：
+
+```bash
+# 首次运行（控制台会打印 run_id，如 20260617_103022_a1b2c3）
+python scripts/local_webchat_runner.py --config task.json --headed
+
+# 中断后续跑
+python scripts/local_webchat_runner.py --resume 20260617_103022_a1b2c3 --headed
+```
+
+### 调参
+
+DeepSeek 等敏感平台的限流参数在 `core/webchat_policy.py` 的 `_MODEL_OVERRIDES`。若实测仍触发风控，进一步调小 `max_consecutive` / `rate_max`，或调大 `burst_cooldown` / `ban_cooldown_sec`。
+

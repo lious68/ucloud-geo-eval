@@ -1,44 +1,95 @@
 <template>
   <div class="task-list">
-    <h2 class="page-title">🚀 执行评测（任务 → 模型 → 问题）</h2>
+    <h2 class="page-title">🚀 执行评测（任务 → 批次 → 问题）</h2>
 
     <el-card>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <span style="font-weight:600">任务列表</span>
+        <span style="font-weight:600">任务列表（点行首 ▸ 展开看批次 / 子任务）</span>
         <el-button v-if="isAdmin()" type="primary" @click="openWizard">
           <el-icon><Plus /></el-icon> 新建任务
         </el-button>
       </div>
       <el-alert type="info" :closable="false" style="margin-bottom:12px">
-        一个任务 = 固定总题集。任务建好后，可在<b>任务详情 →「添加批次」</b>里反复追加：
-        先下 ds、再下豆包 1-12、再下豆包 13-40、再下 kimi、再下文心……每个批次独立下载配置、本机运行、导入，
-        服务器按 (任务,模型,问题) 自动合并去重，并以任务内全部模型×问题为分母重算 GEO。
+        一个任务 = 固定总题集。展开任务行即可看到其下<b>批次（子任务）</b>，每个批次 = 一个模型+题区间的下载配置。
+        可反复「添加批次」：<b>先 ds、再豆包 1-12、再豆包 13-40、再 kimi、再文心</b>……每批独立下载、本机运行、导入，
+        服务器按 (任务,模型,问题) 自动合并，并以任务内全部模型×问题为分母重算 GEO。慢慢补，不必一次全跑。
       </el-alert>
-      <el-table :data="tasks" v-loading="loading" stripe>
-        <el-table-column prop="name" label="任务名" min-width="160" />
+
+      <el-table :data="tasks" v-loading="loading" stripe row-key="id" @expand-change="onExpand">
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="expand-box">
+              <div class="expand-head">
+                <span style="font-weight:600">
+                  评测批次（子任务）· 共 {{ (batchesOf(row.id) || []).length }} 个批次
+                </span>
+                <div>
+                  <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">
+                    ➕ 添加批次
+                  </el-button>
+                  <el-button v-if="isAdmin()" size="small" type="success" @click="openImport(row)">
+                    📥 导入结果
+                  </el-button>
+                  <el-button v-if="row.coverage_rate > 0" size="small" type="primary" @click="viewResult(row)">
+                    📊 查看结果
+                  </el-button>
+                </div>
+              </div>
+
+              <el-table :data="batchesOf(row.id) || []" size="small" border
+                        v-loading="expandLoading[row.id]" style="width:100%">
+                <el-table-column label="批次 / run_id" min-width="210">
+                  <template #default="{ row: b }">
+                    <span style="font-family:monospace;font-size:12px">{{ b.batch_id }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="模型 × 题区间" min-width="260">
+                  <template #default="{ row: b }">
+                    <div v-for="mk in (b.model_keys || [])" :key="mk" style="line-height:1.8">
+                      <el-tag size="small">{{ mk }}</el-tag>
+                      <span style="font-size:12px;color:#666;margin-left:6px">{{ fmtModelRange(b, mk) }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="题数" width="70">
+                  <template #default="{ row: b }">{{ (b.question_ids || []).length }}</template>
+                </el-table-column>
+                <el-table-column label="状态" width="140">
+                  <template #default="{ row: b }">
+                    <el-tag size="small" :type="batchTagType(b.status)">{{ b.status || '-' }}</el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div v-if="!expandLoading[row.id] && !(batchesOf(row.id) || []).length" class="empty-tip">
+                暂无批次，点「添加批次」下载第一个配置
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="name" label="任务名" min-width="150" />
         <el-table-column label="模型">
           <template #default="{ row }">
             <el-tag v-for="m in row.models" :key="m" size="small" style="margin:2px">{{ m }}</el-tag>
+            <span v-if="!(row.models || []).length" style="color:#bbb;font-size:12px">尚未添加批次</span>
           </template>
         </el-table-column>
-        <el-table-column label="题数" width="80">
-          <template #default="{ row }">{{ (row.question_ids||[]).length }}</template>
+        <el-table-column label="总题数" width="80">
+          <template #default="{ row }">{{ (row.question_ids || []).length }}</template>
         </el-table-column>
-        <el-table-column label="覆盖率" width="160">
+        <el-table-column label="覆盖率" width="170">
           <template #default="{ row }">
-            <el-progress :percentage="Math.round((row.coverage_rate||0)*100)" :status="row.coverage_rate>=1?'success':''" />
+            <el-progress :percentage="Math.round((row.coverage_rate || 0) * 100)"
+                         :status="row.coverage_rate >= 1 ? 'success' : ''" />
             <span style="font-size:12px;color:#999">{{ row.done_cells }}/{{ row.total_cells }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.status==='active'?'success':'info'" size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="180">
+        <el-table-column label="操作" width="250">
           <template #default="{ row }">
             <el-button size="small" @click="$router.push(`/tasks/${row.id}`)">详情</el-button>
-            <el-button v-if="isAdmin()" size="small" type="danger" plain @click="onDel(row)">删除</el-button>
+            <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">添加批次</el-button>
+            <el-button v-if="isAdmin()" size="small" type="danger" plain @click="onDel(row)">删</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -55,9 +106,9 @@
             <el-option v-for="c in categories" :key="c.name" :label="`${c.name} (${c.count})`" :value="c.name" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="totalQids.length" label="总题集">
-          <el-tag type="info">已固定 {{ totalQids.length }} 题</el-tag>
-        </el-form-item>
+        <el-alert type="warning" :closable="false" style="margin-top:8px">
+          这一步<b>只建任务</b>（固定总题集）。建好后回到列表，展开该任务点「添加批次」再建子任务（模型+问题）。
+        </el-alert>
       </el-form>
       <template #footer>
         <el-button @click="wizard=false">取消</el-button>
@@ -65,31 +116,54 @@
       </template>
     </el-dialog>
 
-    <!-- 首批配置下载（复用 TaskDetail 同款对话框） -->
+    <!-- 下载配置（添加批次）对话框 -->
     <BatchDownloadDialog v-model:visible="batchDialog"
-      :task-id="createdTaskId"
-      :task-name="form.name"
-      :total-qids="totalQids"
-      @downloaded="load" />
+      :task-id="batchTaskId" :task-name="batchTaskName" :total-qids="batchTotalQids"
+      @downloaded="onBatchDownloaded" />
+
+    <!-- 导入结果对话框 -->
+    <el-dialog v-model="importDialog" :title="`导入结果到「${batchTaskName}」`" width="480px">
+      <el-upload drag :auto-upload="false" :on-change="onFile" accept=".json" :limit="1">
+        <div style="padding:20px"><p style="color:#999">拖入 local_webchat_runner 产出的 .json</p></div>
+      </el-upload>
+      <div v-if="importFile" style="margin-top:12px">{{ importFile.name }}</div>
+      <template #footer>
+        <el-button type="primary" :loading="importing" :disabled="!importFile" @click="doImport">上传并合并</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
-import { listTasks, createTask, deleteTask } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importResults } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
+const router = useRouter()
 const tasks = ref([])
 const loading = ref(false)
 const wizard = ref(false)
 const categories = ref([])
 const form = ref({ name: 'GEO评估', categories: [] })
-const totalQids = ref([])
-const createdTaskId = ref('')
-const batchDialog = ref(false)
 const creating = ref(false)
+
+// 批次（子任务）懒加载
+const batchesMap = ref({})
+const expandLoading = ref({})
+
+// 添加批次对话框
+const batchDialog = ref(false)
+const batchTaskId = ref('')
+const batchTaskName = ref('')
+const batchTotalQids = ref([])
+
+// 导入结果
+const importDialog = ref(false)
+const importFile = ref(null)
+const importing = ref(false)
 
 async function load() {
   loading.value = true
@@ -108,10 +182,95 @@ async function loadCategories() {
   }
 }
 
+function batchesOf(id) { return batchesMap.value[id] }
+
+async function onExpand(row, expandedRows) {
+  const opened = expandedRows.some(r => r.id === row.id)
+  if (!opened) return
+  if (batchesMap.value[row.id]) return
+  expandLoading.value = { ...expandLoading.value, [row.id]: true }
+  try {
+    const res = await getTask(row.id)
+    if (res?.success) batchesMap.value[row.id] = res.data.batches || []
+  } catch (e) {
+    ElMessage.error(`加载批次失败: ${e.message || e}`)
+  } finally {
+    expandLoading.value = { ...expandLoading.value, [row.id]: false }
+  }
+}
+
+async function refreshBatches(taskId) {
+  try {
+    const res = await getTask(taskId)
+    if (res?.success) batchesMap.value = { ...batchesMap.value, [taskId]: res.data.batches || [] }
+  } catch (e) { /* ignore */ }
+}
+
+function openBatch(row) {
+  batchTaskId.value = row.id
+  batchTaskName.value = row.name
+  batchTotalQids.value = row.question_ids || []
+  batchDialog.value = true
+}
+
+async function onBatchDownloaded() {
+  await load()
+  if (batchTaskId.value) await refreshBatches(batchTaskId.value)
+}
+
+function openImport(row) {
+  batchTaskId.value = row.id
+  batchTaskName.value = row.name
+  importFile.value = null
+  importDialog.value = true
+}
+function onFile(f) { importFile.value = f.raw }
+async function doImport() {
+  importing.value = true
+  try {
+    const res = await importResults(batchTaskId.value, importFile.value)
+    if (!res?.success) return ElMessage.error(res?.detail || '导入失败')
+    ElMessage.success(res.message || '导入成功')
+    importDialog.value = false
+    importFile.value = null
+    await load()
+    await refreshBatches(batchTaskId.value)
+  } finally { importing.value = false }
+}
+
+function viewResult(row) {
+  router.push({ path: '/dashboard', query: { task_id: row.id } })
+}
+
+function qnum(qid) {
+  const m = String(qid).match(/(\d+)/)
+  return m ? parseInt(m[1]) : NaN
+}
+function fmtRange(qids) {
+  if (!qids || !qids.length) return '-'
+  const nums = qids.map(qnum).filter(n => !isNaN(n)).sort((a, b) => a - b)
+  if (!nums.length) return qids.length + ' 题'
+  let contiguous = true
+  for (let i = 1; i < nums.length; i++) if (nums[i] - nums[i - 1] !== 1) { contiguous = false; break }
+  const pad = n => 'q' + String(n).padStart(3, '0')
+  if (contiguous) return `${pad(nums[0])} ~ ${pad(nums[nums.length - 1])} (${nums.length}题)`
+  return `${pad(nums[0])} 等 ${nums.length} 题`
+}
+function fmtModelRange(b, mk) {
+  const pm = b.config && b.config.per_model_question_ids
+  const qids = (pm && pm[mk]) || b.question_ids || []
+  return fmtRange(qids)
+}
+function batchTagType(status) {
+  if (status === 'completed') return 'success'
+  if (status === 'config_downloaded') return 'info'
+  if (status === 'running') return 'warning'
+  if (status === 'failed') return 'danger'
+  return ''
+}
+
 async function openWizard() {
   form.value = { name: 'GEO评估', categories: [] }
-  totalQids.value = []
-  createdTaskId.value = ''
   if (!categories.value.length) await loadCategories()
   wizard.value = true
 }
@@ -124,11 +283,9 @@ async function createTaskStep() {
       categories: form.value.categories.length ? form.value.categories : null,
     })
     if (!res?.success) return ElMessage.error(res?.detail || '建任务失败')
-    createdTaskId.value = res.data.id
-    totalQids.value = res.data.question_ids || []
-    ElMessage.success(`任务已创建，总题集 ${totalQids.value.length} 题`)
+    const task = res.data
+    ElMessage.success(`任务已创建（总题集 ${task.question_ids.length} 题）。展开该任务，点「添加批次」创建子任务（模型+问题）`)
     wizard.value = false
-    batchDialog.value = true
     await load()
   } finally { creating.value = false }
 }
@@ -139,6 +296,7 @@ async function onDel(row) {
     const res = await deleteTask(row.id)
     if (!res?.success) return ElMessage.error(res?.detail || '删除失败')
     ElMessage.success('已删除')
+    delete batchesMap.value[row.id]
     await load()
   } catch (e) {
     ElMessage.error(`删除失败: ${e.message || e}`)
@@ -150,4 +308,7 @@ onMounted(async () => { await load(); await loadCategories() })
 
 <style scoped>
 .page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
+.expand-box { padding: 8px 16px 16px 48px; }
+.expand-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.empty-tip { color: #bbb; font-size: 13px; padding: 12px 0; }
 </style>

@@ -9,6 +9,11 @@
           <el-icon><Plus /></el-icon> 新建任务
         </el-button>
       </div>
+      <el-alert type="info" :closable="false" style="margin-bottom:12px">
+        一个任务 = 固定总题集。任务建好后，可在<b>任务详情 →「添加批次」</b>里反复追加：
+        先下 ds、再下豆包 1-12、再下豆包 13-40、再下 kimi、再下文心……每个批次独立下载配置、本机运行、导入，
+        服务器按 (任务,模型,问题) 自动合并去重，并以任务内全部模型×问题为分母重算 GEO。
+      </el-alert>
       <el-table :data="tasks" v-loading="loading" stripe>
         <el-table-column prop="name" label="任务名" min-width="160" />
         <el-table-column label="模型">
@@ -39,51 +44,33 @@
       </el-table>
     </el-card>
 
-    <!-- 新建向导 -->
-    <el-dialog v-model="wizard" title="新建任务" width="640px">
-      <el-steps :active="step" finish-status="success" align-center>
-        <el-step title="定任务总题集" />
-        <el-step title="挂模型 + 题区间" />
-      </el-steps>
-
-      <div v-if="step===0" style="margin-top:20px">
-        <el-form label-width="100px">
-          <el-form-item label="任务名">
-            <el-input v-model="form.name" placeholder="GEO评估" />
-          </el-form-item>
-          <el-form-item label="品类筛选">
-            <el-select v-model="form.categories" multiple placeholder="全部品类" style="width:100%">
-              <el-option v-for="c in categories" :key="c.name" :label="`${c.name} (${c.count})`" :value="c.name" />
-            </el-select>
-          </el-form-item>
-        </el-form>
-      </div>
-
-      <div v-if="step===1" style="margin-top:20px">
-        <el-alert type="info" :closable="false" style="margin-bottom:12px">
-          任务总题集已固定为 {{ totalQids.length }} 题。下面添加本次要下载的模型与题区间（可后续再补）。
-        </el-alert>
-        <div v-for="(row, i) in batchRows" :key="i" style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
-          <el-select v-model="row.model_key" placeholder="选模型" style="width:160px">
-            <el-option v-for="m in readyModels" :key="m.key" :label="m.name" :value="m.key" :disabled="batchRows.some((r,j)=>j!==i&&r.model_key===m.key)" />
-          </el-select>
-          <el-select v-model="row.question_ids" multiple placeholder="题区间（默认全选）" style="flex:1">
-            <el-option v-for="qid in totalQids" :key="qid" :label="qid" :value="qid" />
-          </el-select>
-          <el-button type="danger" link @click="batchRows.splice(i,1)">删</el-button>
-        </div>
-        <el-button size="small" @click="batchRows.push({model_key:'',question_ids:[]})">+ 添加模型</el-button>
-        <el-form-item label="请求间隔" label-width="100px" style="margin-top:12px">
-          <el-slider v-model="form.delay" :min="3" :max="15" :step="1" show-input />
+    <!-- 新建任务向导（仅定任务总题集，建完即弹下载配置对话框） -->
+    <el-dialog v-model="wizard" title="新建任务" width="560px">
+      <el-form label-width="100px">
+        <el-form-item label="任务名">
+          <el-input v-model="form.name" placeholder="GEO评估" />
         </el-form-item>
-      </div>
-
+        <el-form-item label="品类筛选">
+          <el-select v-model="form.categories" multiple placeholder="全部品类（默认全部 48 题）" style="width:100%">
+            <el-option v-for="c in categories" :key="c.name" :label="`${c.name} (${c.count})`" :value="c.name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="totalQids.length" label="总题集">
+          <el-tag type="info">已固定 {{ totalQids.length }} 题</el-tag>
+        </el-form-item>
+      </el-form>
       <template #footer>
-        <el-button v-if="step>0" @click="step--">上一步</el-button>
-        <el-button v-if="step===0" type="primary" @click="createTaskStep">下一步</el-button>
-        <el-button v-if="step===1" type="success" @click="downloadBatch">下载任务配置</el-button>
+        <el-button @click="wizard=false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="createTaskStep">创建任务</el-button>
       </template>
     </el-dialog>
+
+    <!-- 首批配置下载（复用 TaskDetail 同款对话框） -->
+    <BatchDownloadDialog v-model:visible="batchDialog"
+      :task-id="createdTaskId"
+      :task-name="form.name"
+      :total-qids="totalQids"
+      @downloaded="load" />
   </div>
 </template>
 
@@ -91,22 +78,18 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
-import { listTasks, createTask, deleteTask, createBatch } from '../api/tasks'
+import { listTasks, createTask, deleteTask } from '../api/tasks'
+import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const tasks = ref([])
 const loading = ref(false)
 const wizard = ref(false)
-const step = ref(0)
 const categories = ref([])
-const models = ref([])
-const webchatStatus = ref({})
-const form = ref({ name: 'GEO评估', categories: [], delay: 8 })
+const form = ref({ name: 'GEO评估', categories: [] })
 const totalQids = ref([])
 const createdTaskId = ref('')
-const batchRows = ref([{ model_key: '', question_ids: [] }])
-
-const readyModels = ref([])
-const displayModels = ref([])
+const batchDialog = ref(false)
+const creating = ref(false)
 
 async function load() {
   loading.value = true
@@ -116,63 +99,38 @@ async function load() {
   } finally { loading.value = false }
 }
 
-async function openWizard() {
-  step.value = 0
-  form.value = { name: 'GEO评估', categories: [], delay: 8 }
-  totalQids.value = []
-  createdTaskId.value = ''
-  batchRows.value = [{ model_key: '', question_ids: [] }]
-  if (!categories.value.length) await loadConfig()
-  wizard.value = true
-}
-
-async function loadConfig() {
+async function loadCategories() {
   try {
-    const [mRes, cRes, wsRes] = await Promise.all([
-      apiFetch('/settings/models'),
-      apiFetch('/questions/categories'),
-      apiFetch('/webchat/auth/status'),
-    ])
-    models.value = (mRes.data && (mRes.data.models || mRes.data)) || []
+    const cRes = await apiFetch('/questions/categories')
     categories.value = cRes.data || []
-    webchatStatus.value = wsRes.data || {}
-    displayModels.value = models.value.map(m => {
-      const ws = webchatStatus.value[m.key] || {}
-      return { ...m, webchat_status: ws.has_auth ? 'ready' : 'no_auth' }
-    })
-    readyModels.value = displayModels.value.filter(m => m.webchat_status === 'ready')
   } catch (e) {
-    ElMessage.error(`加载配置失败: ${e.message || e}`)
+    ElMessage.error(`加载品类失败: ${e.message || e}`)
   }
 }
 
-async function createTaskStep() {
-  const res = await createTask({ name: form.value.name, categories: form.value.categories.length ? form.value.categories : null })
-  if (!res?.success) return ElMessage.error(res?.detail || '建任务失败')
-  createdTaskId.value = res.data.id
-  totalQids.value = res.data.question_ids || []
-  step.value = 1
-  if (!readyModels.value.length) await loadConfig()
-  ElMessage.success(`任务已创建，总题集 ${totalQids.value.length} 题`)
+async function openWizard() {
+  form.value = { name: 'GEO评估', categories: [] }
+  totalQids.value = []
+  createdTaskId.value = ''
+  if (!categories.value.length) await loadCategories()
+  wizard.value = true
 }
 
-async function downloadBatch() {
-  const rows = batchRows.value.filter(r => r.model_key)
-  if (!rows.length) return ElMessage.warning('请至少添加一个模型')
-  const per_model = {}
-  for (const r of rows) per_model[r.model_key] = r.question_ids.length ? r.question_ids : [...totalQids.value]
-  const res = await createBatch(createdTaskId.value, { model_keys: Object.keys(per_model), per_model_question_ids: per_model, delay: form.value.delay })
-  if (!res?.success) return ElMessage.error(res?.detail || '生成配置失败')
-  const cfg = res.data
-  const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `task_${form.value.name}_${cfg.batch_id}.json`
-  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
-  ElMessage.success('任务配置已下载，请在本机运行 local_webchat_runner.py --config 该文件')
-  wizard.value = false
-  await load()
+async function createTaskStep() {
+  creating.value = true
+  try {
+    const res = await createTask({
+      name: form.value.name,
+      categories: form.value.categories.length ? form.value.categories : null,
+    })
+    if (!res?.success) return ElMessage.error(res?.detail || '建任务失败')
+    createdTaskId.value = res.data.id
+    totalQids.value = res.data.question_ids || []
+    ElMessage.success(`任务已创建，总题集 ${totalQids.value.length} 题`)
+    wizard.value = false
+    batchDialog.value = true
+    await load()
+  } finally { creating.value = false }
 }
 
 async function onDel(row) {
@@ -187,7 +145,7 @@ async function onDel(row) {
   }
 }
 
-onMounted(async () => { await load(); await loadConfig() })
+onMounted(async () => { await load(); await loadCategories() })
 </script>
 
 <style scoped>

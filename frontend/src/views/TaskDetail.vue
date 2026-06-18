@@ -13,6 +13,9 @@
           <div style="font-size:12px;color:#999;margin-bottom:4px">覆盖率</div>
           <el-progress :percentage="Math.round(detail.summary.coverage_rate*100)" />
         </div>
+        <el-button v-if="isAdmin()" type="primary" plain @click="batchDialog=true">
+          <el-icon><Plus /></el-icon> 添加批次
+        </el-button>
         <el-button v-if="isAdmin()" type="success" @click="importDialog=true">
           <el-icon><Upload /></el-icon> 导入结果
         </el-button>
@@ -68,6 +71,13 @@
         <el-button type="primary" :loading="importing" :disabled="!file" @click="doImport">上传并合并</el-button>
       </template>
     </el-dialog>
+
+    <!-- 添加批次（下载配置）对话框 -->
+    <BatchDownloadDialog v-model:visible="batchDialog"
+      :task-id="route.params.taskId"
+      :task-name="detail.task.name"
+      :total-qids="detail.task.question_ids"
+      @downloaded="load" />
   </div>
 </template>
 
@@ -77,6 +87,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { isAdmin } from '../composables/useWebSocket'
 import { getTask, importResults } from '../api/tasks'
+import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -85,6 +96,7 @@ const loading = ref(false)
 const importDialog = ref(false)
 const file = ref(null)
 const importing = ref(false)
+const batchDialog = ref(false)
 
 async function load() {
   loading.value = true

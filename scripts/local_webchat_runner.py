@@ -68,6 +68,7 @@ from database import get_questions as db_get_questions
 from scheduler import EvalScheduler
 from task_units import SqliteUnitStore
 from webchat_policy import get_model_policy
+from web_chat_auth import has_auth_state
 
 
 def _analysis_to_dict(a) -> Dict:
@@ -237,6 +238,7 @@ async def run_local_eval(
     name: str = "GEO评估",
     per_model_questions: Optional[Dict[str, List[Dict]]] = None,
     task_meta: Optional[Dict] = None,
+    headed: bool = False,
 ):
     """执行本地 WebChat 评测（三级任务调度：任务 → 模型 → 问题）
 
@@ -278,6 +280,35 @@ async def run_local_eval(
         print("  错误: 没有可评估的问题")
         return
     print(f"  加载 {len(questions)} 个问题")
+
+    # ── 登录预检：--headed 下，无登录态的模型先弹浏览器让用户登录 ──
+    # 有登录态 → 直接进调度（--headed 下浏览器可见，能看到执行）
+    # 无登录态 + --headed → 弹浏览器引导登录、保存后继续
+    # 无登录态 + headless → 无法登录，跳过；全部无态则中止、不产出空结果
+    missing_auth = [mk for mk in model_keys if not has_auth_state(mk)]
+    if missing_auth:
+        if headed:
+            from setup_webchat_auth import setup_auth
+            print(f"\n[登录预检] 以下模型无登录态: {', '.join(missing_auth)}")
+            print(f"  将依次打开浏览器，请在弹出的窗口中登录对应模型，登录完成后回到终端按 Enter 保存。")
+            for mk in missing_auth:
+                print(f"\n  → 开始登录 {mk} ...")
+                try:
+                    await setup_auth(mk)
+                except Exception as e:
+                    print(f"  ❌ {mk} 登录流程异常: {e}")
+            still_missing = [mk for mk in model_keys if not has_auth_state(mk)]
+            if still_missing:
+                print(f"\n  ⚠️ 以下模型仍无登录态，将被跳过: {', '.join(still_missing)}")
+        else:
+            print(f"\n[登录预检] 以下模型无登录态，且非 --headed 模式无法弹浏览器登录，将被跳过: {', '.join(missing_auth)}")
+            print(f"  （如需登录请加 --headed 参数，或先运行 python scripts/setup_webchat_auth.py <model>）")
+
+    # 全部模型无登录态 → 中止，不产出空结果（避免空结果污染任务）
+    if all(not has_auth_state(mk) for mk in model_keys):
+        print("\n❌ 所有模型均无登录态，已中止，未生成结果文件。")
+        print("   请用 --headed 模式运行以弹出浏览器登录，或先运行 setup_webchat_auth.py。")
+        return
 
     # 2. 生成/复用 run_id + 单元库 + 清单
     if not run_id:
@@ -512,7 +543,7 @@ def main():
         _setup_headed_mode(args.headed)
         asyncio.run(run_local_eval(
             model_keys=[], output_path="", delay=0.0,
-            run_id=args.resume, resume=True,
+            run_id=args.resume, resume=True, headed=args.headed,
         ))
         return
 
@@ -597,6 +628,7 @@ def main():
         name=task_name,
         per_model_questions=per_model_questions,
         task_meta=task_meta,
+        headed=args.headed,
     ))
 
 

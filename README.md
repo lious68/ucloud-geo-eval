@@ -41,8 +41,11 @@
 ┌───────────────────────▼─────────────────────────┐
 │          FastAPI Backend (Python)                 │
 │  ├─ 鉴权中间件 (Token + 角色权限)                 │
-│  ├─ 评测管理 (创建/执行/删除)                     │
-│  ├─ 结果查询 (评分/详情/图表/引用/下钻)            │
+│  ├─ 三级任务管理 (任务→模型→问题, WebChat 模式)    │
+│  │   ├─ tasks 顶层表 + task_id/batch_id 跨批次合并 │
+│  │   └─ 固定总题集 + 按 (task,model,question) 去重 │
+│  ├─ 评测管理 (API 模式 创建/执行/删除)             │
+│  ├─ 结果查询 (评分/详情/图表/引用/下钻, 支持 task_id)│
 │  ├─ 引用源统计 (全量来源聚类/下钻)                │
 │  ├─ 问题管理 (CRUD)                              │
 │  ├─ 用户管理 (添加/删除/角色分配)                  │
@@ -50,7 +53,10 @@
 ├───────────────────────────────────────────────────┤
 │  SQLite 数据库 (data/geo.db)                      │
 ├───────────────────────────────────────────────────┤
-│  Core 评估引擎                                    │
+│  Core 评估引擎 (服务器 + 本地 runner 共用)         │
+│  ├─ scheduler.py      → 三级调度(交错/限流/重试/封号退避/续跑) │
+│  ├─ task_units.py     → 单元状态层(断点续跑)        │
+│  ├─ webchat_policy.py → 逐模型限流策略 + 封号信号检测 │
 │  ├─ model_clients.py  → 5大模型API (OpenAI兼容)   │
 │  ├─ analyzer.py       → 响应分析 (提及/引用/推荐)  │
 │  ├─ metrics.py        → GEO指标计算               │
@@ -62,7 +68,7 @@
 
 ```
 ucloud-geo-eval/
-├── core/                        # 核心评估引擎
+├── core/                        # 核心评估引擎（服务器 + 本地 runner 共用）
 │   ├── config.py                # 模型配置、品牌关键词、评分参数、URL渠道映射
 │   ├── questions.py             # 48题评估问题集（10品类×5类型）
 │   ├── model_clients.py         # AI模型API客户端（OpenAI兼容）
@@ -71,33 +77,42 @@ ucloud-geo-eval/
 │   ├── report.py                # 报告生成器（HTML/Excel）
 │   ├── web_chat_clients.py      # WebChat浏览器自动化客户端（5模型Playwright）
 │   ├── web_chat_auth.py         # WebChat认证状态管理
+│   ├── scheduler.py             # 三级调度引擎（交错/限流/重试/封号退避/断点续跑）
+│   ├── task_units.py            # 单元状态层（断点续跑的唯一事实来源）
+│   ├── webchat_policy.py        # 逐模型限流策略 + 封号信号检测
 │   └── main.py                  # CLI 主执行脚本
 │
 ├── backend/                     # Web 后端 (FastAPI)
 │   ├── app.py                   # FastAPI 入口 + 鉴权中间件 + 角色权限
-│   ├── database.py              # SQLite 异步数据库 + 迁移 + 用户管理
-│   ├── models.py                # Pydantic 数据模型
+│   ├── database.py              # SQLite 异步数据库 + 迁移 + 用户管理 + task 维度查询
+│   ├── models.py                # Pydantic 数据模型（含 TaskCreate/BatchCreate）
 │   ├── routers/
 │   │   ├── auth.py              # 登录鉴权 + 用户管理 API + require_admin
-│   │   ├── evaluations.py       # 评测管理 + WebSocket 进度 + 任务配置导出
-│   │   ├── results.py           # 结果查询 / 引用详情 / 引用源统计 / 下钻
+│   │   ├── tasks.py             # 三级任务管理（建任务/批次/导入/评分/详情）
+│   │   ├── evaluations.py       # API 模式评测管理 + WebSocket 进度
+│   │   ├── results.py           # 结果查询（支持 task_id）/ 引用 / 下钻
 │   │   ├── questions.py         # 问题管理
 │   │   ├── settings.py          # 系统设置
 │   │   └── webchat.py           # WebChat认证状态上传/验证
 │   └── services/
-│       ├── eval_runner.py       # 异步评测执行器
+│       ├── task_service.py      # 三级任务领域逻辑（合并去重/重算/覆盖率矩阵）
+│       ├── eval_runner.py       # API 模式异步评测执行器
 │       └── chart_builder.py     # ECharts 图表 JSON 构建
 │
 ├── frontend/                    # Web 前端 (Vue 3)
 │   └── src/
 │       ├── views/
-│       │   ├── Dashboard.vue       # 📊 GEO 仪表盘
-│       │   ├── Evaluation.vue      # 🚀 执行评测（支持API/导入本地结果）
+│       │   ├── Dashboard.vue       # 📊 GEO 仪表盘（支持 ?task_id= 任务级）
+│       │   ├── Evaluation.vue      # 🚀 执行评测（三级任务管理入口，嵌入 TaskList）
+│       │   ├── TaskList.vue        # 📋 任务列表 + 新建任务向导
+│       │   ├── TaskDetail.vue      # 🧩 任务详情（模型×题覆盖率矩阵 + 批次 + 导入）
 │       │   ├── History.vue         # 📜 历史评测情况
 │       │   ├── CitationSources.vue # 🔗 引用源情况
 │       │   ├── Questions.vue       # 📝 问题管理
 │       │   ├── Settings.vue        # ⚙️ 系统设置 + 用户管理
 │       │   └── Login.vue           # 🔐 登录（用户名+密码）
+│       ├── api/
+│       │   └── tasks.js            # /api/tasks 路由组 API 客户端
 │       ├── stores/
 │       │   └── evalProgress.js     # 评测进度全局状态（跨页面可见）
 │       └── composables/
@@ -105,14 +120,22 @@ ucloud-geo-eval/
 │
 ├── scripts/                     # 工具脚本
 │   ├── setup_webchat_auth.py    # WebChat 登录态设置脚本（本地运行）
-│   ├── local_webchat_runner.py  # 本地 Playwright WebChat 评测 runner
+│   ├── local_webchat_runner.py  # 本地 Playwright WebChat 评测 runner（消费 v2 任务配置）
 │   ├── webchat_run.py           # WebChat 交互式一键启动（Win/Mac通用）
 │   ├── run_webchat.bat          # Windows 快捷启动脚本
+│   ├── test_db_migration.py     # 自检：tasks 表 + task_id 列迁移幂等
+│   ├── test_tasks_service.py    # 自检：task_service 合并去重/矩阵/重算
+│   ├── test_tasks_api.py        # 自检：/api/tasks 全链路冒烟
+│   ├── test_runner_v2_config.py # 自检：本地 runner v2 配置解析
+│   ├── test_scheduler_selfcheck.py  # 自检：调度器交错/限流/重试/封号/续跑/每模型题区间
 │   ├── webchat_interactive_helper.py  # VNC 远程反爬验证辅助
 │   └── inspect_chat_dom.py      # 聊天页面 DOM 检查工具
 │
 ├── docs/
-│   └── webchat_local_guide.md   # WebChat 本地评测详细使用指南
+│   ├── webchat_local_guide.md           # WebChat 本地评测详细使用指南
+│   └── superpowers/
+│       ├── specs/2026-06-17-evaluation-three-level-design.md   # 三级任务架构设计
+│       └── plans/2026-06-17-evaluation-three-level.md          # 实施计划
 │
 ├── data/
 │   └── webchat_auth/            # WebChat 认证状态文件目录
@@ -158,15 +181,19 @@ bash deploy.sh
 
 部署完成后访问 `http://<服务器IP>/`，首次使用设置管理密码，然后在「系统设置」页面配置 API Key、添加查看者账号。
 
-### WebChat 联网搜索评测（云 + 本地联动模式）
+### WebChat 联网搜索评测（三级任务架构，云 + 本地联动）
 
-除了 API 模式评测（调用模型 API），系统还支持 **WebChat 模式**——通过 Playwright 浏览器自动化，模拟真实用户在各 AI 模型官网的聊天交互，获取带联网搜索引用的完整响应。
+除 API 模式外，系统支持 **WebChat 模式**——通过 Playwright 浏览器自动化，模拟真实用户在各 AI 模型官网的聊天交互，获取带联网搜索引用的完整响应。WebChat 模式采用 **任务 → 模型 → 问题** 三级任务架构，将网站管理端与实际执行端解耦：
 
-**为什么需要云+本地联动？**
-- **API 模式**（服务器上直接跑）：适用于有 API Key 且支持联网搜索的模型
-- **WebChat 模式**（本地电脑跑）：适用于 API 无法调通或需要浏览器交互处理验证码的模型
+- **服务器（Linux）**：任务创建、参数配置、结果合并与去重、数据展示
+- **本地电脑（Win/Mac）**：异步执行实际评测（浏览器自动化），不受网站服务/浏览器状态/网络波动影响
 
-> **核心思路**：服务器前端选择评测配置 → 下载任务配置 JSON → 本地电脑运行 Playwright 浏览器自动化 → 生成的结果文件上传回服务器 → Dashboard 查看
+**为什么需要三级任务架构？** DeepSeek 等平台对高频连续请求极敏感，同一账号短时连续问询超过约 25 次即触发封号。标准基准 40 题 × 5 模型 = 200 次请求，链路必须零中断、可恢复。三级任务机制通过单元级持久化 + 跨模型交错 + 逐模型限流 + 封号信号自动退避 + 单题多次重试 + 断点续跑来保证完整性。
+
+**数据结构支持灵活追加与分批执行：**
+- 同一任务下可以先评测模型 1，后续再增加模型 2
+- 同一模型下可以先执行第 1–20 题，再补充执行第 21–40 题
+- 服务器按 `(task_id, model_key, question_id)` 自动合并多次导入，以任务为最终汇总单位，避免重复执行、结果覆盖或数据错乱
 
 **支持的 WebChat 模型：**
 
@@ -181,102 +208,84 @@ bash deploy.sh
 #### 整体工作流
 
 ```
-┌────────────────────── 服务器 (Linux) ──────────────────────┐
-│                                                              │
-│  Evaluation.vue 前端                                         │
-│  ├─ API 模式 → 直接调用模型 API + 联网搜索                    │
-│  └─ WebChat 模式 → 下载任务配置 ↓                            │
-│                                                              │
-│                                     ┌─ 导入结果 ← 本地 .json  │
-│                                     └─ Dashboard 展示结果      │
-└──────────────────────────────────────────────────────────────┘
-                               │
-                     下载 task_config.json
-                               │
-                               ▼
-┌───────────────────── 本地电脑 (Win10 / Mac) ───────────────┐
-│                                                              │
-│  python scripts/local_webchat_runner.py                      │
-│    --config task_config.json --headed                        │
-│                                                              │
-│  → 弹出浏览器窗口（人可手动处理验证码/登录）                   │
-│  → 自动提问 → 等待回复 → 分析 → 评分                         │
-│  → 输出: output/webchat_评测_20260608_143022.json           │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-                               │
-                     上传 .json 到服务器前端
-                               │
-                               ▼
-                     服务器导入 → Dashboard 展示
+┌──────────────────── 服务器 (Linux) ──────────────────────┐
+│  /evaluation 三级任务管理页                                │
+│  ① 新建任务 → 拍板固定总题集                                │
+│  ② 任务下挂模型 + 每模型题区间 → 下载 task_config.json     │
+│        (含 task_id / batch_id / units)                    │
+│  ④ 导入结果 JSON → 按 (task,model,question) 合并去重        │
+│     → 重算 GEO 评分 → 覆盖率矩阵 + Dashboard 展示          │
+└────────────────────────┬─────────────────────────────────┘
+                         │ 下载 task_config.json
+                         ▼
+┌──────────────────── 本地电脑 (Win / Mac) ────────────────┐
+│  python scripts/local_webchat_runner.py                  │
+│    --config task_config.json --headed                    │
+│  EvalScheduler：跨模型交错 + 逐模型限流 + 单题重试         │
+│                 + 封号信号退避 + 断点续跑(--resume)        │
+│  → output/<run_id>.json (meta 透传 task_id / batch_id)    │
+└────────────────────────┬─────────────────────────────────┘
+                         │ 上传结果 JSON
+                         ▼
+              服务器导入 → 合并 → 矩阵刷新 + 评分重算
 ```
 
-#### 第一步：在服务器上下载任务配置
+#### 第一步：在服务器上创建任务并下载配置
 
-1. 登录服务器前端 → 「执行评测」页面
-2. 选择 **「🌐 WebChat 模式」**
-3. 勾选要评测的模型（需显示 **「✓ 已登录」**）
-4. 选择品类筛选（可选）
-5. 调整请求间隔（建议 8 秒以上）
-6. 点击 **「下载任务配置（在本地电脑运行）」** → 浏览器下载 `webchat_task_XXX.json`
+1. 登录服务器前端 → 「执行评测」页面（即三级任务管理页）
+2. 点击 **「新建任务」**：填任务名 + 选品类 → **拍板固定总题集**（创建后不可改）
+3. 在任务下 **「添加评测模型」**：每行选一个模型 + 该模型要跑的题区间（总题集子集，默认全选）→ 点击 **「下载任务配置」** → 浏览器下载 `task_<name>_<batch_id>.json`
+   - 可重复添加：先下模型 1 的 1–20 题，后补模型 2、或模型 1 的 21–40 题——每次独立批次 + 独立配置下载
 
 #### 第二步：在本地电脑上运行评测
 
-将 `webchat_task_XXX.json` 传到本地电脑后，有三种运行方式：
-
-**方式 A：从任务配置运行（推荐，云联动）**
+将 `task_<name>_<batch_id>.json` 传到本地电脑后运行：
 
 ```bash
 # 显示浏览器窗口（可手动处理验证码/登录）
-python scripts/local_webchat_runner.py --config webchat_task_XXX.json --headed
+python scripts/local_webchat_runner.py --config task_<name>_<batch_id>.json --headed
 
 # 后台运行（不显示窗口）
-python scripts/local_webchat_runner.py --config webchat_task_XXX.json
+python scripts/local_webchat_runner.py --config task_<name>_<batch_id>.json
 ```
 
-**方式 B：交互式引导（新手友好）**
+runner 解析 v2 配置中的 `units`（每模型独立题区间），按 `(model_key, question_ids)` 展开调度单元。运行过程中：
+- 跨模型交错推进，单模型连续请求被限流配额压制（DeepSeek：突发 15、每小时 20、封号冷却 1800s）
+- 出现「频率过快」信号 → 自动长冷却后单元退回 pending 重试
+- 出现「登录已过期」→ 该模型剩余单元跳过（需人工重登）
+- 瞬态错误（超时/空响应）→ 指数退避重试，超 max_attempts 落 failed
+- 每完成一题增量写 `output/<run_id>.partial.json`，**崩溃也不丢已完成题**
 
+**断点续跑**（同一 batch 中断后恢复）：
 ```bash
-# 进入交互式配置引导
-python scripts/webchat_run.py
+# 控制台会打印 run_id（如 20260617_103022_a1b2c3）
+python scripts/local_webchat_runner.py --resume <run_id> --headed
 ```
+自动跳过 `done`，仅补跑 `pending/failed`；续跑产出的结果 JSON 回填同一 `task_id`/`batch_id`。
 
-**方式 C：手动指定参数**
-
+**手动模式（无需服务器配置，直接指定参数）：**
 ```bash
 python scripts/local_webchat_runner.py --models kimi ernie --headed --delay 10
 python scripts/local_webchat_runner.py --models kimi --categories 云数据库
 ```
 
-**Windows 快捷启动：**
-```powershell
-scripts\run_webchat.bat                # 交互式引导
-scripts\run_webchat.bat kimi headed    # 指定模型 + 显示浏览器
-scripts\run_webchat.bat config task.json  # 从配置文件运行
-```
-
-**Mac/Linux 快捷启动：**
-```bash
-python scripts/webchat_run.py                    # 交互式
-python scripts/webchat_run.py --config task.json  # 从配置
-python scripts/webchat_run.py --models kimi ernie  # 手动指定
-```
-
 #### 第三步：处理验证码/登录
 
-使用 `--headed` 参数时，浏览器会弹出窗口。运行过程中：
-- 如果需要登录 → 在浏览器窗口中手动登录
-- 如果出现验证码 → 在浏览器窗口中手动完成验证
-- 登录状态会自动保存到 `data/webchat_auth/`，下次运行无需重复登录
+使用 `--headed` 参数时浏览器会弹出窗口：
+- 需要登录 → 在浏览器窗口手动登录
+- 出现验证码 → 在浏览器窗口手动完成
+- 登录状态自动保存到 `data/webchat_auth/`，下次运行无需重复登录
 
-#### 第四步：上传结果到服务器
+#### 第四步：导入结果到服务器任务
 
-评测完成后，会在 `output/` 目录生成结果文件（如 `output/webchat_评测_20260608_143022.json`）。
+评测完成后在 `output/` 生成结果文件（如 `output/webchat_<name>_<ts>.json`，meta 内含 `task_id`/`batch_id`）。
 
-1. 将此文件传到服务器
-2. 在服务器前端「执行评测」页面，找到 **「导入本地 WebChat 结果」** 区域
-3. 拖拽或点击上传 .json 文件
-4. 导入成功后，点击 **「查看结果 →」** 跳转到 Dashboard
+1. 进入服务器「执行评测」→ 点该任务的 **「详情」**
+2. 在任务详情页点 **「导入结果」**，上传 .json 文件
+3. 服务器按 `(task_id, model_key, question_id)` 合并去重（同题同模型重导覆盖不累积），重算该任务的 GEO 评分（全局 + 各品类），覆盖率矩阵自动刷新
+4. 点击 **「查看结果 →」** 跳转 Dashboard（`?task_id=`）查看任务级评分与图表
+
+> 同一任务可多次导入不同批次的结果，服务器自动合并；矩阵清晰展示哪些 (模型, 问题) 已完成、缺失，便于按缺口下载下一批配置补跑。
 
 #### 本地环境准备
 
@@ -295,6 +304,18 @@ python scripts/setup_webchat_auth.py ernie
 - **登录有效期**：各平台 cookie 有效期不同（通常 7-30 天），过期后需重新运行 `setup_webchat_auth.py` 登录
 - **不要退出登录**：保存 cookie 后，不要在该浏览器中退出登录，否则 cookie 会失效
 - 服务器上已预装 Playwright + Chromium，无需额外安装
+- **限流参数调优**：DeepSeek 等敏感平台的限流参数在 `core/webchat_policy.py` 的 `_MODEL_OVERRIDES`，实测仍触发风控可进一步调小 `max_consecutive`/`rate_max` 或调大 `burst_cooldown`/`ban_cooldown_sec`
+
+#### 自检脚本
+
+仓库自带 5 个自检脚本（不真打平台，用 mock / TestClient），可随时验证引擎与 API 正确性：
+```bash
+python scripts/test_db_migration.py        # tasks 表 + task_id 列迁移幂等
+python scripts/test_tasks_service.py       # task_service 合并去重 / 矩阵 / 重算
+python scripts/test_tasks_api.py           # /api/tasks 全链路冒烟
+python scripts/test_runner_v2_config.py    # 本地 runner v2 配置解析
+python scripts/test_scheduler_selfcheck.py # 调度器交错/限流/重试/封号/续跑/每模型题区间
+```
 
 ### 方式二：CLI 命令行
 

@@ -43,9 +43,8 @@
     </el-form-item>
 
     <template #footer>
-      <el-button @click="$emit('update:visible', false)">关闭</el-button>
-      <el-button type="success" plain :loading="downloading" @click="downloadBatch(false)">下载并继续</el-button>
-      <el-button type="success" :loading="downloading" @click="downloadBatch(true)">下载任务配置</el-button>
+      <el-button @click="$emit('update:visible', false)">取消</el-button>
+      <el-button type="success" :loading="downloading" @click="downloadBatch">确定并下载配置</el-button>
     </template>
   </el-dialog>
 </template>
@@ -132,7 +131,7 @@ function applyRange(row) {
 function selectAll(row) { row.question_ids = [...poolQids(row)] }
 function addRow() { batchRows.value.push(new_row()) }
 
-async function downloadBatch(closeAfter) {
+async function downloadBatch() {
   const rows = batchRows.value.filter(r => r.model_key)
   if (!rows.length) return ElMessage.warning('请至少添加一个模型')
   const per_model = {}
@@ -156,8 +155,9 @@ async function downloadBatch(closeAfter) {
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
     ElMessage.success('任务配置已下载，请在本机运行 local_webchat_runner.py --config 该文件')
     emit('downloaded')
-    if (closeAfter) emit('update:visible', false)
-    else batchRows.value = [new_row()]
+    emit('update:visible', false)
+  } catch (e) {
+    ElMessage.error(`下载失败: ${e.message || e}`)
   } finally { downloading.value = false }
 }
 </script>

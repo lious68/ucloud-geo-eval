@@ -150,8 +150,12 @@ class WebChatClientBase:
             # 封号信号检测：把分类结果编码进 error 文本，
             # 交给 scheduler 统一处理（重试/冷却/跳过）。
             # 用稳定的触发短语，确保 scheduler 端 classify_signal 能确定性分类。
-            from webchat_policy import classify_signal
-            sig = classify_signal(text)
+            # 注意：只对「短文本」分类（classify_content_signal）。真实限流/登录
+            # 提示是短句；正常回答数百字且可能含「限流/429/验证码」等技术词
+            # （评估对象 UCloud 是云厂商），对长正文扫描会误判限流、触发 900s
+            # 冷却把整模型卡死。
+            from webchat_policy import classify_content_signal
+            sig = classify_content_signal(text)
             if sig == "login_expired":
                 return {"model": self.model_key, "model_name": self.name, "content": "",
                         "raw_response": None,

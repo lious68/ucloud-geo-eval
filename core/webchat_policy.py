@@ -129,3 +129,28 @@ def classify_signal(text: str) -> str:
     if _THROTTLE_RE.search(text):
         return "throttle"
     return "ok"
+
+
+# 对「模型回答正文」分类时，正文最长不计入的阈值。
+# 真实限流/登录失效提示是短句（通常 <50 字）；正常回答数百字以上。
+_CONTENT_SIGNAL_MAX_LEN = 100
+
+
+def classify_content_signal(text: str, max_len: int = _CONTENT_SIGNAL_MAX_LEN) -> str:
+    """对「模型回答正文」做封号信号分类（只对短文本生效）。
+
+    与 classify_signal 的区别：长度 >= max_len 的正文直接判 ok。
+
+    原因：throttle 模式里有「限流」「429」「安全验证」「验证码」「系统繁忙」等
+    宽词，而评估对象 UCloud 是云厂商，其真实回答里常出现这些技术词（讨论限流、
+    429 重试、安全验证、验证码等）。对长正文用 classify_signal 会把正确回答误判
+    为 throttle，触发 900s 冷却把整模型卡死。真实限流/登录提示是短句，所以只对
+    短文本分类即可既捕获真提示、又不误伤长回答。
+
+    错误信息（err）仍用 classify_signal，错误串天然短，不受此限。
+    """
+    if not text:
+        return "ok"
+    if len(text) >= max_len:
+        return "ok"
+    return classify_signal(text)

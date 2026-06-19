@@ -102,21 +102,17 @@
       </el-table>
     </el-card>
 
-    <!-- 新建任务向导（仅定任务总题集，建完即弹下载配置对话框） -->
-    <el-dialog v-model="wizard" title="新建任务" width="560px">
+    <!-- 新建任务向导：只建任务（= GEO 计算的总集/范围），不再选品类 -->
+    <el-dialog v-model="wizard" title="新建任务" width="520px">
       <el-form label-width="100px">
         <el-form-item label="任务名">
           <el-input v-model="form.name" placeholder="GEO评估" />
         </el-form-item>
-        <el-form-item label="品类筛选">
-          <el-select v-model="form.categories" multiple placeholder="全部品类（默认全部 48 题）" style="width:100%">
-            <el-option v-for="c in categories" :key="c.name" :label="`${c.name} (${c.count})`" :value="c.name" />
-          </el-select>
-        </el-form-item>
-        <el-alert type="warning" :closable="false" style="margin-top:8px">
-          这一步<b>只建任务</b>（固定总题集）。建好后回到列表，展开该任务点「添加批次」再建子任务（模型+问题）。
-        </el-alert>
       </el-form>
+      <el-alert type="info" :closable="false" style="margin-top:4px">
+        任务 = <b>GEO 计算的总集/范围</b>（默认全部题）。这一步<b>只建任务</b>，
+        建好后回列表展开该任务，点「添加批次」再建子任务（模型 × 品类 × 题号区间）。
+      </el-alert>
       <template #footer>
         <el-button @click="wizard=false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="createTaskStep">创建任务</el-button>
@@ -153,8 +149,7 @@ const router = useRouter()
 const tasks = ref([])
 const loading = ref(false)
 const wizard = ref(false)
-const categories = ref([])
-const form = ref({ name: 'GEO评估', categories: [] })
+const form = ref({ name: 'GEO评估' })
 const creating = ref(false)
 
 // 批次（子任务）懒加载
@@ -178,15 +173,6 @@ async function load() {
     const res = await listTasks()
     tasks.value = res.data || []
   } finally { loading.value = false }
-}
-
-async function loadCategories() {
-  try {
-    const cRes = await apiFetch('/questions/categories')
-    categories.value = cRes.data || []
-  } catch (e) {
-    ElMessage.error(`加载品类失败: ${e.message || e}`)
-  }
 }
 
 function batchesOf(id) { return batchesMap.value[id] }
@@ -297,21 +283,17 @@ function batchTagType(status) {
 }
 
 async function openWizard() {
-  form.value = { name: 'GEO评估', categories: [] }
-  if (!categories.value.length) await loadCategories()
+  form.value = { name: 'GEO评估' }
   wizard.value = true
 }
 
 async function createTaskStep() {
   creating.value = true
   try {
-    const res = await createTask({
-      name: form.value.name,
-      categories: form.value.categories.length ? form.value.categories : null,
-    })
+    const res = await createTask({ name: form.value.name })
     if (!res?.success) return ElMessage.error(res?.detail || '建任务失败')
     const task = res.data
-    ElMessage.success(`任务已创建（总题集 ${task.question_ids.length} 题）。展开该任务，点「添加批次」创建子任务（模型+问题）`)
+    ElMessage.success(`任务已创建（总题集 ${task.question_ids.length} 题）。展开该任务，点「添加批次」创建子任务（模型×品类×题号区间）`)
     wizard.value = false
     await load()
   } finally { creating.value = false }
@@ -330,7 +312,7 @@ async function onDel(row) {
   }
 }
 
-onMounted(async () => { await load(); await loadCategories() })
+onMounted(async () => { await load() })
 </script>
 
 <style scoped>

@@ -1,39 +1,42 @@
 <template>
   <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)"
-             title="下载任务配置（评测批次）" width="760px" @open="onOpen">
+             title="添加批次（子任务：模型 × 品类 × 题号区间）" width="820px" @open="onOpen">
     <el-alert type="info" :closable="false" style="margin-bottom:12px">
-      任务总题集已固定为 <b>{{ totalQids.length }}</b> 题。每次下载生成一个独立批次配置，
-      在本机运行后导入即按 (任务,模型,问题) 合并进本任务。
-      <b>同一模型可分多次下载不同题区间</b>（如先 1-12，再 13-40），不会覆盖已导入结果。
+      每个批次 = <b>一个模型</b> + <b>一个品类</b>（或全部）+ <b>题号区间</b>。
+      同一模型可分多次下载不同品类/区间（如 豆包·海外云主机·1-12，再 豆包·海外云主机·13-20），
+      导入后按 (任务,模型,问题) 自动合并，不会覆盖已导入结果。
     </el-alert>
 
     <div v-for="(row, i) in batchRows" :key="i" class="batch-row">
-      <el-select v-model="row.model_key" placeholder="选模型" style="width:170px">
-        <el-option v-for="m in readyModels" :key="m.key" :label="m.name" :value="m.key"
-                   :disabled="batchRows.some((r,j)=>j!==i&&r.model_key===m.key)" />
-      </el-select>
-
-      <div class="range-box">
+      <div class="row-line1">
+        <el-select v-model="row.model_key" placeholder="选模型" style="width:170px">
+          <el-option v-for="m in readyModels" :key="m.key" :label="m.name" :value="m.key"
+                     :disabled="batchRows.some((r,j)=>j!==i&&r.model_key===m.key)" />
+        </el-select>
+        <el-select v-model="row.category" placeholder="品类" style="width:200px" @change="onCategoryChange(row)">
+          <el-option label="全部品类" value="全部" />
+          <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+        </el-select>
+        <span class="pool-hint">该品类下 {{ poolQids(row).length }} 题</span>
+        <el-button type="danger" link @click="batchRows.splice(i,1)" style="margin-left:auto">删</el-button>
+      </div>
+      <div class="row-line2">
         <span class="range-hint">题号区间</span>
         <el-input v-model="row.from" placeholder="起" size="small" style="width:60px" />
         <span>-</span>
         <el-input v-model="row.to" placeholder="止" size="small" style="width:60px" />
-        <el-button size="small" link type="primary" @click="applyRange(row)">应用</el-button>
-        <el-button size="small" link @click="selectAll(row)">全选</el-button>
+        <el-button size="small" link type="primary" @click="applyRange(row)">应用区间</el-button>
+        <el-button size="small" link @click="selectAll(row)">全选该品类</el-button>
         <el-button size="small" link @click="row.question_ids=[]">清空</el-button>
-        <span class="range-count">已选 {{ row.question_ids.length }}/{{ totalQids.length }}</span>
+        <span class="range-count">已选 {{ row.question_ids.length }}/{{ poolQids(row).length }}</span>
       </div>
-      <el-button type="danger" link @click="batchRows.splice(i,1)">删</el-button>
-
       <el-select v-model="row.question_ids" multiple collapse-tags collapse-tags-tooltip
-                 placeholder="题区间（默认全选总题集）" style="width:100%;margin-top:4px">
-        <el-option v-for="qid in totalQids" :key="qid" :label="qid" :value="qid" />
+                 placeholder="题区间（默认=该品类全部）" style="width:100%;margin-top:4px">
+        <el-option v-for="qid in poolQids(row)" :key="qid" :label="qid" :value="qid" />
       </el-select>
     </div>
 
-    <el-button size="small" @click="batchRows.push({model_key:'',question_ids:[],from:'',to:''})">
-      + 添加模型
-    </el-button>
+    <el-button size="small" @click="addRow">+ 添加模型</el-button>
 
     <el-form-item label="请求间隔" label-width="100px" style="margin-top:12px">
       <el-slider v-model="delay" :min="3" :max="15" :step="1" show-input />
@@ -41,18 +44,14 @@
 
     <template #footer>
       <el-button @click="$emit('update:visible', false)">关闭</el-button>
-      <el-button type="success" plain :loading="downloading" @click="downloadBatch(false)">
-        下载并继续
-      </el-button>
-      <el-button type="success" :loading="downloading" @click="downloadBatch(true)">
-        下载任务配置
-      </el-button>
+      <el-button type="success" plain :loading="downloading" @click="downloadBatch(false)">下载并继续</el-button>
+      <el-button type="success" :loading="downloading" @click="downloadBatch(true)">下载任务配置</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiFetch } from '../composables/useWebSocket'
 import { createBatch } from '../api/tasks'
@@ -66,14 +65,23 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'downloaded'])
 
 const readyModels = ref([])
-const batchRows = ref([{ model_key: '', question_ids: [], from: '', to: '' }])
+const taskQuestions = ref([])        // [{id, category, ...}] 限本任务总题集
+const batchRows = ref([])
 const delay = ref(8)
 const downloading = ref(false)
 
+const categoryOptions = computed(() => {
+  const set = []
+  for (const q of taskQuestions.value) if (q.category && !set.includes(q.category)) set.push(q.category)
+  return set
+})
+
+function new_row() { return { model_key: '', category: '全部', question_ids: [], from: '', to: '' } }
+
 async function onOpen() {
-  batchRows.value = [{ model_key: '', question_ids: [], from: '', to: '' }]
+  batchRows.value = [new_row()]
   delay.value = 8
-  if (!readyModels.value.length) await loadModels()
+  await Promise.all([loadModels(), loadQuestions()])
 }
 
 async function loadModels() {
@@ -88,36 +96,49 @@ async function loadModels() {
       const w = ws[m.key] || {}
       return { ...m, webchat_status: w.has_auth ? 'ready' : 'no_auth' }
     }).filter(m => m.webchat_status === 'ready')
-    if (!readyModels.value.length) {
-      ElMessage.warning('暂无已配置登录态的模型，请先在本地运行 setup_webchat_auth.py')
-    }
+    if (!readyModels.value.length) ElMessage.warning('暂无已配置登录态的模型，请先在本地运行 setup_webchat_auth.py')
   } catch (e) {
     ElMessage.error(`加载模型失败: ${e.message || e}`)
   }
 }
 
-function qnum(qid) {
-  const m = String(qid).match(/(\d+)/)
-  return m ? parseInt(m[1]) : NaN
+async function loadQuestions() {
+  try {
+    const res = await apiFetch('/questions')
+    const all = res.data || []
+    const idset = new Set(props.totalQids && props.totalQids.length ? props.totalQids : all.map(q => q.id))
+    taskQuestions.value = all.filter(q => idset.has(q.id))
+  } catch (e) {
+    ElMessage.error(`加载题目失败: ${e.message || e}`)
+  }
 }
+
+function poolQids(row) {
+  if (row.category === '全部') return taskQuestions.value.map(q => q.id)
+  return taskQuestions.value.filter(q => q.category === row.category).map(q => q.id)
+}
+function onCategoryChange(row) {
+  row.question_ids = []
+  row.from = ''; row.to = ''
+}
+
+function qnum(qid) { const m = String(qid).match(/(\d+)/); return m ? parseInt(m[1]) : NaN }
 function applyRange(row) {
   const a = parseInt(row.from), b = parseInt(row.to)
   if (isNaN(a) || isNaN(b) || a > b) return ElMessage.warning('请输入有效起止题号')
-  row.question_ids = props.totalQids.filter(qid => {
-    const n = qnum(qid)
-    return !isNaN(n) && n >= a && n <= b
-  })
-  if (!row.question_ids.length) ElMessage.warning('该区间未匹配到题目，请检查题号')
+  row.question_ids = poolQids(row).filter(qid => { const n = qnum(qid); return !isNaN(n) && n >= a && n <= b })
+  if (!row.question_ids.length) ElMessage.warning('该区间在所选品类下未匹配到题目')
 }
-function selectAll(row) { row.question_ids = [...props.totalQids] }
+function selectAll(row) { row.question_ids = [...poolQids(row)] }
+function addRow() { batchRows.value.push(new_row()) }
 
 async function downloadBatch(closeAfter) {
   const rows = batchRows.value.filter(r => r.model_key)
   if (!rows.length) return ElMessage.warning('请至少添加一个模型')
   const per_model = {}
-  for (const r of rows) {
-    per_model[r.model_key] = r.question_ids.length ? r.question_ids : [...props.totalQids]
-  }
+  for (const r of rows) per_model[r.model_key] = r.question_ids.length ? r.question_ids : [...poolQids(r)]
+  // 校验非空
+  for (const mk in per_model) if (!per_model[mk].length) return ElMessage.warning(`模型 ${mk} 所选品类下无题目`)
   downloading.value = true
   try {
     const res = await createBatch(props.taskId, {
@@ -135,11 +156,8 @@ async function downloadBatch(closeAfter) {
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
     ElMessage.success('任务配置已下载，请在本机运行 local_webchat_runner.py --config 该文件')
     emit('downloaded')
-    if (closeAfter) {
-      emit('update:visible', false)
-    } else {
-      batchRows.value = [{ model_key: '', question_ids: [], from: '', to: '' }]
-    }
+    if (closeAfter) emit('update:visible', false)
+    else batchRows.value = [new_row()]
   } finally { downloading.value = false }
 }
 </script>
@@ -150,12 +168,10 @@ async function downloadBatch(closeAfter) {
   border-radius: 6px;
   padding: 10px;
   margin-bottom: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
 }
-.range-box { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 320px; }
+.row-line1 { display: flex; align-items: center; gap: 8px; }
+.row-line2 { display: flex; align-items: center; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
 .range-hint { font-size: 12px; color: #666; }
 .range-count { font-size: 12px; color: #999; margin-left: 4px; }
+.pool-hint { font-size: 12px; color: #999; }
 </style>

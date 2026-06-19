@@ -201,6 +201,18 @@ CREATE TABLE IF NOT EXISTS geo_scores (
     valid_responses INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS batch_import_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    run_id TEXT,
+    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    results_inserted INTEGER DEFAULT 0,
+    file_name TEXT,
+    file_size INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_bil_batch ON batch_import_logs(task_id, batch_id, imported_at);
+
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1132,6 +1144,53 @@ async def get_batch_results(task_id: str, batch_id: str) -> List[Dict]:
             (task_id, batch_id)
         )
         return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def add_batch_import_log(task_id: str, batch_id: str, run_id: Optional[str],
+                               results_inserted: int, file_name: Optional[str] = None,
+                               file_size: Optional[int] = None) -> int:
+    """记一条批次导入审计日志，返回新行 id。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO batch_import_logs "
+            "(task_id, batch_id, run_id, results_inserted, file_name, file_size) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (task_id, batch_id, run_id, results_inserted, file_name, file_size)
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_batch_import_logs(task_id: str, batch_id: str) -> List[Dict]:
+    """取某批次的全部导入日志，按时间倒序。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM batch_import_logs "
+            "WHERE task_id=? AND batch_id=? ORDER BY imported_at DESC, id DESC",
+            (task_id, batch_id)
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_last_import_times(task_id: str) -> Dict[str, str]:
+    """返回 {batch_id: 最后导入时间}，用于批次行展示。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT batch_id, MAX(imported_at) AS last_at "
+            "FROM batch_import_logs WHERE task_id=? GROUP BY batch_id",
+            (task_id,)
+        )
+        rows = await cursor.fetchall()
+        return {r["batch_id"]: r["last_at"] for r in rows if r["batch_id"]}
     finally:
         await db.close()
 

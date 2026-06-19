@@ -102,6 +102,20 @@ async def main():
     after = len(await db.get_task_results(task_id))
     assert after == before, f"题集外的 Q999 不应入库: before={before} after={after}"
 
+    # 7. 导入审计日志：每次导入都记一条
+    logs = await task_service.get_batch_import_logs(task_id, cfg["batch_id"])
+    assert len(logs) == 1, f"批次 {cfg['batch_id']} 应有 1 条日志，实得 {len(logs)}"
+    assert logs[0]["results_inserted"] == 2, f"首导应记 2 条，实得 {logs[0]['results_inserted']}"
+    logs2 = await task_service.get_batch_import_logs(task_id, "batch_2")
+    assert len(logs2) == 1 and logs2[0]["results_inserted"] == 4, "batch_2 应记 4 条"
+    logs3 = await task_service.get_batch_import_logs(task_id, "batch_3")
+    assert len(logs3) == 1 and logs3[0]["results_inserted"] == 0, "batch_3 题集外应记 0 条"
+
+    # 8. build_task_detail 注入 last_import_at
+    detail2 = await task_service.build_task_detail(task_id)
+    b1 = next(b for b in detail2["batches"] if b["batch_id"] == cfg["batch_id"])
+    assert b1["last_import_at"] is not None, "已导入批次应有 last_import_at"
+
     print("✅ PASS: task_service 合并去重 + 矩阵 + 重算")
 
 

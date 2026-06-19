@@ -135,7 +135,9 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
     }
 
 
-async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str] = None) -> Dict:
+async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str] = None,
+                               file_name: Optional[str] = None,
+                               file_size: Optional[int] = None) -> Dict:
     """导入本地 runner 结果 JSON，按 (task_id,model,question) 去重覆盖，重算 task 评分。
 
     data 形如 {"meta": {"task_id","batch_id","run_id",...},
@@ -165,12 +167,23 @@ async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str]
     # 重算 task 评分（覆盖）
     await recalculate_task_scores(task_id)
 
+    # 记一条导入审计日志（数据已落库，记成功痕迹）
+    try:
+        await db.add_batch_import_log(task_id, batch_id, run_id, inserted, file_name, file_size)
+    except Exception:
+        pass  # 审计日志写失败不影响导入结果
+
     return {"task_id": task_id, "batch_id": batch_id, "results_inserted": inserted}
 
 
 async def get_batch_results(task_id: str, batch_id: str) -> List[Dict]:
     """取某批次的全部分析结果（带题目原文）。"""
     return await db.get_batch_results(task_id, batch_id)
+
+
+async def get_batch_import_logs(task_id: str, batch_id: str) -> List[Dict]:
+    """取某批次的导入审计日志（时间倒序）。"""
+    return await db.get_batch_import_logs(task_id, batch_id)
 
 
 async def recalculate_task_scores(task_id: str) -> None:
@@ -248,8 +261,10 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
     batches = await db.list_task_batches(task_id)
     # 给每个批次注入已导入结果条数（analysis_results 按 batch_id 分组计数）
     result_counts = await db.count_task_results_by_batch(task_id)
+    last_imports = await db.get_last_import_times(task_id)
     for b in batches:
         b["result_count"] = result_counts.get(b.get("batch_id"), 0)
+        b["last_import_at"] = last_imports.get(b.get("batch_id"))
     scores = await db.get_task_scores(task_id)
 
     all_qids = task["question_ids"]

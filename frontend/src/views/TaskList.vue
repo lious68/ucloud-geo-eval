@@ -296,6 +296,8 @@ async function createTaskStep() {
     ElMessage.success(`任务已创建（总题集 ${task.question_ids.length} 题）。展开该任务，点「添加批次」创建子任务（模型×品类×题号区间）`)
     wizard.value = false
     await load()
+  } catch (e) {
+    ElMessage.error(`建任务失败: ${e.message || e}`)
   } finally { creating.value = false }
 }
 

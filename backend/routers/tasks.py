@@ -12,9 +12,7 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 @router.post("")
 async def create_task(req: models.TaskCreate, user=Depends(require_admin)):
-    """建任务，固定总题集。"""
-    if not req.question_ids and not req.categories:
-        raise HTTPException(400, "需提供 question_ids 或 categories 之一")
+    """建任务，固定总题集。仅传 name 时默认全部题（任务=GEO计算总集）。"""
     qids = await task_service.resolve_question_ids(req.question_ids, req.categories)
     if not qids:
         raise HTTPException(400, "没有可评估的问题")

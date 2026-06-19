@@ -76,7 +76,10 @@ async def import_batch_results(task_id: str, batch_id: str,
     except json.JSONDecodeError as e:
         raise HTTPException(400, f"JSON 解析失败: {e}")
     try:
-        result = await task_service.import_batch_results(task_id, data, batch_id=batch_id)
+        result = await task_service.import_batch_results(
+            task_id, data, batch_id=batch_id,
+            file_name=file.filename, file_size=len(content)
+        )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"success": True, "data": result,
@@ -90,6 +93,13 @@ async def get_batch_results(task_id: str, batch_id: str):
     return {"success": True, "data": rows}
 
 
+@router.get("/{task_id}/batches/{batch_id}/import-logs")
+async def get_batch_import_logs(task_id: str, batch_id: str):
+    """取某批次的导入审计日志（时间倒序）。"""
+    rows = await task_service.get_batch_import_logs(task_id, batch_id)
+    return {"success": True, "data": rows}
+
+
 @router.post("/{task_id}/import-results")
 async def import_results(task_id: str, file: UploadFile = File(...),
                          user=Depends(require_admin)):
@@ -100,7 +110,9 @@ async def import_results(task_id: str, file: UploadFile = File(...),
     except json.JSONDecodeError as e:
         raise HTTPException(400, f"JSON 解析失败: {e}")
     try:
-        result = await task_service.import_batch_results(task_id, data)
+        result = await task_service.import_batch_results(
+            task_id, data, file_name=file.filename, file_size=len(content)
+        )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"success": True, "data": result,

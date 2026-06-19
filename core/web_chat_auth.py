@@ -46,7 +46,10 @@ WEBCHAT_SITES = {
     "qwen": {
         "name": "千问",
         "url": "https://www.qianwen.com",
-        "auth_cookies": ["login_sid", "token", "access_token", "csrf_token", "aliyun_login", "ALI_session_v2", "login_aliyunid"],
+        # 实测（diag_webchat_cookies.py）：qwen 登录后写入通义 SSO 票据 tongyi_sso_ticket
+        # （httpOnly、1年、.qianwen.com）与 b-user-id；旧列的 login_sid/token/.../login_aliyunid
+        # qwen 根本不写，已废弃。
+        "auth_cookies": ["tongyi_sso_ticket", "tongyi_sso_ticket_hash", "b-user-id"],
         "auth_domains": ["qianwen.com", "aliyun.com", "tongyi"],
     },
 }

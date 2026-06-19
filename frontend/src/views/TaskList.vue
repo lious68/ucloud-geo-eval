@@ -16,8 +16,8 @@
       </el-alert>
 
       <el-table :data="tasks" v-loading="loading" stripe row-key="id" @expand-change="onExpand">
-        <el-table-column type="expand" width="110">
-          <template #header><span class="expand-hdr">展开批次 ▾</span></template>
+        <el-table-column type="expand" width="100">
+          <template #header><span class="expand-hdr">展开</span></template>
           <template #default="{ row }">
             <div class="expand-box">
               <div class="expand-head">
@@ -38,8 +38,8 @@
                         row-key="batch_id"
                         v-loading="expandLoading[row.id]" style="width:100%"
                         @expand-change="onBatchExpand">
-                <el-table-column type="expand" width="110">
-                  <template #header><span class="expand-hdr">展开结果 ▾</span></template>
+                <el-table-column type="expand" width="100">
+                  <template #header><span class="expand-hdr">展开</span></template>
                   <template #default="{ row: b }">
                     <div class="batch-results-box">
                       <div v-if="batchResultsLoading[b.batch_id]" class="batch-results-tip">加载中…</div>
@@ -433,28 +433,16 @@ onMounted(async () => { await load() })
 
 <style scoped>
 .page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
-/* 展开箭头显眼化：放大、主色、按钮感 */
-.expand-hdr { color: var(--el-color-primary); font-weight: 700; font-size: 13px; white-space: nowrap; }
+/* 展开箭头：干净的 chevron 图标，hover/展开转主色（旋转由 EP 原生处理） */
+.expand-hdr { color: #a8abb2; font-size: 12px; font-weight: 500; white-space: nowrap; }
 :deep(.el-table__expand-icon) {
-  font-size: 20px;
-  color: var(--el-color-primary);
-  border: 1px solid var(--el-color-primary-light-5);
-  border-radius: 6px;
-  padding: 3px 5px;
-  transition: all .15s ease;
+  font-size: 16px;
+  color: #a8abb2;
+  transition: color .2s ease;
 }
-:deep(.el-table__expand-icon .el-icon) { font-size: 20px; }
-:deep(.el-table__expand-icon:hover) {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary-light-3);
-  border-color: var(--el-color-primary-light-3);
-}
-:deep(.el-table__expand-icon--expanded) {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-}
-/* 展开列单元格居中、略宽，强化可点感 */
-:deep(.el-table__cell .el-table__expand-icon) { margin: 0 auto; }
+:deep(.el-table__expand-icon .el-icon) { font-size: 16px; }
+:deep(.el-table__expand-icon:hover) { color: var(--el-color-primary); }
+:deep(.el-table__expand-icon--expanded) { color: var(--el-color-primary); }
 .expand-box { padding: 8px 16px 16px 48px; }
 .expand-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .empty-tip { color: #bbb; font-size: 13px; padding: 12px 0; }

@@ -1104,6 +1104,38 @@ async def get_task_results(task_id: str, model_key: Optional[str] = None) -> Lis
         await db.close()
 
 
+async def count_task_results_by_batch(task_id: str) -> Dict[str, int]:
+    """返回 {batch_id: 结果条数}，仅统计有 batch_id 的行。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT batch_id, COUNT(*) AS cnt FROM analysis_results "
+            "WHERE task_id=? AND batch_id IS NOT NULL GROUP BY batch_id",
+            (task_id,)
+        )
+        rows = await cursor.fetchall()
+        return {r["batch_id"]: r["cnt"] for r in rows}
+    finally:
+        await db.close()
+
+
+async def get_batch_results(task_id: str, batch_id: str) -> List[Dict]:
+    """取某批次的全部分析结果（LEFT JOIN questions 带题目原文），按 model_key、question_id 排序。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT a.*, q.question AS question_text, q.category AS question_category "
+            "FROM analysis_results a "
+            "LEFT JOIN questions q ON a.question_id = q.id "
+            "WHERE a.task_id=? AND a.batch_id=? "
+            "ORDER BY a.model_key, a.question_id",
+            (task_id, batch_id)
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
 async def get_task_scores(task_id: str, category: Optional[str] = None) -> List[Dict]:
     db = await get_db()
     try:

@@ -27,9 +27,6 @@
                   <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">
                     ➕ 添加批次
                   </el-button>
-                  <el-button v-if="isAdmin()" size="small" type="success" @click="openImport(row)">
-                    📥 导入结果
-                  </el-button>
                   <el-button v-if="row.coverage_rate > 0" size="small" type="primary" @click="viewResult(row)">
                     📊 查看结果
                   </el-button>
@@ -37,7 +34,43 @@
               </div>
 
               <el-table :data="batchesOf(row.id) || []" size="small" border
-                        v-loading="expandLoading[row.id]" style="width:100%">
+                        row-key="batch_id"
+                        v-loading="expandLoading[row.id]" style="width:100%"
+                        @expand-change="onBatchExpand">
+                <el-table-column type="expand">
+                  <template #default="{ row: b }">
+                    <div class="batch-results-box">
+                      <div v-if="batchResultsLoading[b.batch_id]" class="batch-results-tip">加载中…</div>
+                      <div v-else-if="!(batchResultsOf(b.batch_id) || []).length" class="batch-results-tip">
+                        暂无导入结果，点该批次「📥 导入」上传本地 runner 产出的 JSON
+                      </div>
+                      <div v-else>
+                        <div class="batch-results-head">
+                          共 {{ (batchResultsOf(b.batch_id) || []).length }} 条结果（题目 + 模型回答）
+                        </div>
+                        <div v-for="(r, idx) in (batchResultsOf(b.batch_id) || [])" :key="idx" class="result-card">
+                          <div class="result-card-head">
+                            <el-tag size="small">{{ r.model_key }}</el-tag>
+                            <span class="result-qid">{{ r.question_id }}</span>
+                            <el-tag v-if="r.question_category" size="small" type="info" effect="plain">{{ r.question_category }}</el-tag>
+                            <span class="result-flags">
+                              <el-tag v-if="r.ucloud_mentioned" size="small" type="success">提及</el-tag>
+                              <el-tag v-if="r.ucloud_recommended" size="small" type="success">推荐</el-tag>
+                              <el-tag v-if="r.has_citation" size="small" type="warning">引用{{ r.citation_count }}</el-tag>
+                              <el-tag v-if="r.ucloud_rank" size="small">排名#{{ r.ucloud_rank }}</el-tag>
+                              <el-tag size="small" effect="plain">情感{{ r.sentiment_label }}({{ (r.sentiment_score||0).toFixed(2) }})</el-tag>
+                            </span>
+                          </div>
+                          <div class="result-q"><b>题目：</b>{{ r.question_text || '(题目原文缺失)' }}</div>
+                          <div v-if="r.error_message" class="result-error">⚠ {{ r.error_message }}</div>
+                          <div v-else class="result-ans"><b>模型回答：</b>
+                            <pre class="result-pre">{{ r.raw_content || '(空)' }}</pre>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </el-table-column>
                 <el-table-column label="批次 / run_id" min-width="210">
                   <template #default="{ row: b }">
                     <span style="font-family:monospace;font-size:12px">{{ b.batch_id }}</span>
@@ -57,15 +90,24 @@
                 <el-table-column label="题数" width="70">
                   <template #default="{ row: b }">{{ (b.question_ids || []).length }}</template>
                 </el-table-column>
-                <el-table-column label="状态" width="140">
+                <el-table-column label="结果" width="120">
+                  <template #default="{ row: b }">
+                    <el-tag v-if="(b.result_count || 0) > 0" size="small" type="success">已导入 {{ b.result_count }}</el-tag>
+                    <el-tag v-else size="small" type="info" effect="plain">未导入</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="130">
                   <template #default="{ row: b }">
                     <el-tag size="small" :type="batchTagType(b.status)">{{ b.status || '-' }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="110" fixed="right">
+                <el-table-column label="操作" width="160" fixed="right">
                   <template #default="{ row: b }">
+                    <el-button v-if="isAdmin()" size="small" link type="success" @click="openImport(b)">
+                      📥 导入
+                    </el-button>
                     <el-button size="small" link type="primary" @click="downloadBatchConfig(b)">
-                      ⬇ 下载配置
+                      ⬇ 配置
                     </el-button>
                   </template>
                 </el-table-column>
@@ -127,13 +169,14 @@
       :task-id="batchTaskId" :task-name="batchTaskName" :total-qids="batchTotalQids"
       @downloaded="onBatchDownloaded" />
 
-    <!-- 导入结果对话框 -->
-    <el-dialog v-model="importDialog" :title="`导入结果到「${batchTaskName}」`" width="480px">
+    <!-- 导入结果对话框（批次级） -->
+    <el-dialog v-model="importDialog" :title="`导入结果到批次「${importBatch ? importBatch.batch_id : ''}」`" width="480px">
       <el-upload drag :auto-upload="false" :on-change="onFile" accept=".json" :limit="1">
-        <div style="padding:20px"><p style="color:#999">拖入 local_webchat_runner 产出的 .json</p></div>
+        <div style="padding:20px"><p style="color:#999">拖入该批次对应 local_webchat_runner 产出的 .json</p></div>
       </el-upload>
       <div v-if="importFile" style="margin-top:12px">{{ importFile.name }}</div>
       <template #footer>
+        <el-button @click="importDialog=false">取消</el-button>
         <el-button type="primary" :loading="importing" :disabled="!importFile" @click="doImport">上传并合并</el-button>
       </template>
     </el-dialog>
@@ -145,7 +188,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
-import { listTasks, createTask, deleteTask, getTask, importResults } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
@@ -165,10 +208,14 @@ const batchTaskId = ref('')
 const batchTaskName = ref('')
 const batchTotalQids = ref([])
 
-// 导入结果
+// 导入结果（批次级）
 const importDialog = ref(false)
 const importFile = ref(null)
 const importing = ref(false)
+const importBatch = ref(null)   // { task_id, batch_id }
+// 批次展开结果（懒加载）
+const batchResultsMap = ref({})       // batch_id -> 结果数组
+const batchResultsLoading = ref({})   // batch_id -> bool
 
 async function load() {
   loading.value = true
@@ -200,6 +247,30 @@ async function refreshBatches(taskId) {
     const res = await getTask(taskId)
     if (res?.success) batchesMap.value = { ...batchesMap.value, [taskId]: res.data.batches || [] }
   } catch (e) { /* ignore */ }
+}
+
+function batchResultsOf(batchId) { return batchResultsMap.value[batchId] }
+
+async function onBatchExpand(row, expandedRows) {
+  // row = batch；只在展开时懒加载该批次结果
+  const opened = expandedRows.some(r => r.batch_id === row.batch_id)
+  if (!opened) return
+  await loadBatchResults(row)
+}
+
+async function loadBatchResults(b) {
+  const taskId = b.task_id
+  const batchId = b.batch_id
+  if (!taskId || !batchId) return
+  batchResultsLoading.value = { ...batchResultsLoading.value, [batchId]: true }
+  try {
+    const res = await getBatchResults(taskId, batchId)
+    if (res?.success) batchResultsMap.value = { ...batchResultsMap.value, [batchId]: res.data || [] }
+  } catch (e) {
+    ElMessage.error(`加载批次结果失败: ${e.message || e}`)
+  } finally {
+    batchResultsLoading.value = { ...batchResultsLoading.value, [batchId]: false }
+  }
 }
 
 function openBatch(row) {
@@ -234,23 +305,27 @@ async function downloadBatchConfig(b) {
   }
 }
 
-function openImport(row) {
-  batchTaskId.value = row.id
-  batchTaskName.value = row.name
+function openImport(b) {
+  // b = batch 行；pin 到该批次
+  importBatch.value = { task_id: b.task_id, batch_id: b.batch_id }
   importFile.value = null
   importDialog.value = true
 }
 function onFile(f) { importFile.value = f.raw }
 async function doImport() {
+  if (!importBatch.value) return
+  const { task_id, batch_id } = importBatch.value
   importing.value = true
   try {
-    const res = await importResults(batchTaskId.value, importFile.value)
+    const res = await importBatchResults(task_id, batch_id, importFile.value)
     if (!res?.success) return ElMessage.error(res?.detail || '导入失败')
     ElMessage.success(res.message || '导入成功')
     importDialog.value = false
     importFile.value = null
     await load()
-    await refreshBatches(batchTaskId.value)
+    await refreshBatches(task_id)
+    // 若该批次已展开，刷新其结果
+    await loadBatchResults({ task_id, batch_id })
   } finally { importing.value = false }
 }
 
@@ -361,4 +436,15 @@ onMounted(async () => { await load() })
 .empty-tip { color: #bbb; font-size: 13px; padding: 12px 0; }
 .model-qids { display: flex; align-items: baseline; gap: 6px; line-height: 1.7; }
 .model-qids .qid-list { font-size: 12px; color: #555; word-break: break-all; }
+.batch-results-box { padding: 8px 16px 8px 24px; background: #fafbfc; }
+.batch-results-tip { color: #bbb; font-size: 13px; padding: 8px 0; }
+.batch-results-head { font-size: 13px; color: #555; margin-bottom: 8px; font-weight: 600; }
+.result-card { border: 1px solid #ebeef5; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; background: #fff; }
+.result-card-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.result-qid { font-family: monospace; font-size: 13px; font-weight: 600; }
+.result-flags { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.result-q { font-size: 13px; color: #333; margin-bottom: 6px; }
+.result-ans { font-size: 13px; color: #333; }
+.result-error { color: #c0392b; font-size: 13px; }
+.result-pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; border-radius: 4px; padding: 8px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
 </style>

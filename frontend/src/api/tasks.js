@@ -32,6 +32,16 @@ export function importResults(taskId, file) {
   return apiFetch(`/tasks/${taskId}/import-results`, { method: 'POST', body: formData })
 }
 
+export function importBatchResults(taskId, batchId, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return apiFetch(`/tasks/${taskId}/batches/${batchId}/import-results`, { method: 'POST', body: formData })
+}
+
+export function getBatchResults(taskId, batchId) {
+  return apiFetch(`/tasks/${taskId}/batches/${batchId}/results`)
+}
+
 export function getTaskScores(taskId, category = null) {
   const q = category ? `?category=${encodeURIComponent(category)}` : ''
   return apiFetch(`/tasks/${taskId}/scores${q}`)

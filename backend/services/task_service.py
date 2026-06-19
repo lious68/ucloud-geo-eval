@@ -135,17 +135,19 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
     }
 
 
-async def import_batch_results(task_id: str, data: Dict) -> Dict:
+async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str] = None) -> Dict:
     """导入本地 runner 结果 JSON，按 (task_id,model,question) 去重覆盖，重算 task 评分。
 
     data 形如 {"meta": {"task_id","batch_id","run_id",...},
               "questions": [...], "analysis_results": {mk: [result,...]}}
+
+    batch_id: 若传入则 pin 到该批次（覆盖 meta.batch_id），保证结果计数归属正确。
     """
     task = await db.get_task(task_id)
     if not task:
         raise ValueError("任务不存在")
     meta = data.get("meta") or {}
-    batch_id = meta.get("batch_id") or "batch_unknown"
+    batch_id = batch_id or meta.get("batch_id") or "batch_unknown"
     run_id = meta.get("run_id") or f"run_{batch_id}"
 
     analysis_results = data.get("analysis_results") or {}
@@ -164,6 +166,11 @@ async def import_batch_results(task_id: str, data: Dict) -> Dict:
     await recalculate_task_scores(task_id)
 
     return {"task_id": task_id, "batch_id": batch_id, "results_inserted": inserted}
+
+
+async def get_batch_results(task_id: str, batch_id: str) -> List[Dict]:
+    """取某批次的全部分析结果（带题目原文）。"""
+    return await db.get_batch_results(task_id, batch_id)
 
 
 async def recalculate_task_scores(task_id: str) -> None:
@@ -239,6 +246,10 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
         return None
     coverage = await db.get_task_coverage(task_id)
     batches = await db.list_task_batches(task_id)
+    # 给每个批次注入已导入结果条数（analysis_results 按 batch_id 分组计数）
+    result_counts = await db.count_task_results_by_batch(task_id)
+    for b in batches:
+        b["result_count"] = result_counts.get(b.get("batch_id"), 0)
     scores = await db.get_task_scores(task_id)
 
     all_qids = task["question_ids"]

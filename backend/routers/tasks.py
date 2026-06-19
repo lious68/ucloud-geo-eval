@@ -66,6 +66,30 @@ async def get_batch_config(task_id: str, batch_id: str):
     return {"success": True, "data": config}
 
 
+@router.post("/{task_id}/batches/{batch_id}/import-results")
+async def import_batch_results(task_id: str, batch_id: str,
+                               file: UploadFile = File(...), user=Depends(require_admin)):
+    """导入本地 runner 结果 JSON 到指定批次（pin batch_id），按 (task,model,question) 合并去重 + 重算。"""
+    content = await file.read()
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"JSON 解析失败: {e}")
+    try:
+        result = await task_service.import_batch_results(task_id, data, batch_id=batch_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": True, "data": result,
+            "message": f"批次 {batch_id} 已导入 {result['results_inserted']} 条结果并重算评分"}
+
+
+@router.get("/{task_id}/batches/{batch_id}/results")
+async def get_batch_results(task_id: str, batch_id: str):
+    """取某批次已导入的分析结果（带题目原文），供前端展开查看问题+答案。"""
+    rows = await task_service.get_batch_results(task_id, batch_id)
+    return {"success": True, "data": rows}
+
+
 @router.post("/{task_id}/import-results")
 async def import_results(task_id: str, file: UploadFile = File(...),
                          user=Depends(require_admin)):

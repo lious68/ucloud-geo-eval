@@ -240,20 +240,6 @@ const batchImportLogsLoading = ref({})   // batch_id -> bool
 
 function batchImportLogsOf(batchId) { return batchImportLogsMap.value[batchId] }
 
-async function loadBatchImportLogs(b) {
-  const taskId = b.task_id
-  const batchId = b.batch_id
-  if (!taskId || !batchId) return
-  batchImportLogsLoading.value = { ...batchImportLogsLoading.value, [batchId]: true }
-  try {
-    const res = await getBatchImportLogs(taskId, batchId)
-    if (res?.success) batchImportLogsMap.value = { ...batchImportLogsMap.value, [batchId]: res.data || [] }
-  } catch (e) {
-    /* 静默：审计日志加载失败不阻断结果展示 */
-  } finally {
-    batchImportLogsLoading.value = { ...batchImportLogsLoading.value, [batchId]: false }
-  }
-}
 
 function fmtImportTime(s) {
   if (!s) return ''
@@ -325,7 +311,7 @@ async function loadBatchResults(b) {
   try {
     const [res, logs] = await Promise.all([
       getBatchResults(taskId, batchId),
-      getBatchImportLogs(taskId, batchId),
+      getBatchImportLogs(taskId, batchId).catch(() => null),
     ])
     if (res?.success) batchResultsMap.value = { ...batchResultsMap.value, [batchId]: res.data || [] }
     if (logs?.success) batchImportLogsMap.value = { ...batchImportLogsMap.value, [batchId]: logs.data || [] }

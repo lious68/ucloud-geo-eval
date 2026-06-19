@@ -251,12 +251,15 @@ class WebChatClientBase:
 
             try:
                 # 使用 querySelectorAll 取最后一个元素，与 page.locator(selector).last 一致
+                # selector 作为 evaluate 参数传入，避免含单引号的选择器（如
+                # [class*='message-content']）破坏 JS 字符串字面量导致 SyntaxError。
                 current_length = await page.evaluate(
-                    f"() => {{ "
-                    f"  const els = document.querySelectorAll('{selector}'); "
-                    f"  if (!els.length) return 0; "
-                    f"  return (els[els.length - 1]?.innerText || '').length; "
-                    f"}}"
+                    "(sel) => {"
+                    "  const els = document.querySelectorAll(sel);"
+                    "  if (!els.length) return 0;"
+                    "  return (els[els.length - 1]?.innerText || '').length;"
+                    "}",
+                    selector,
                 )
             except Exception:
                 current_length = 0
@@ -555,7 +558,7 @@ class KimiWebChatClient(WebChatClientBase):
                 rightTexts.push(node.textContent.trim());
             }
 
-            return {text: rightTexts.join('\n').trim(), linkCount: links.length};
+            return {text: rightTexts.join('\\n').trim(), linkCount: links.length};
         }""")
 
         text = result.get("text", "")

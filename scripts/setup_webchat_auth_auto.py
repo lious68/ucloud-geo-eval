@@ -30,7 +30,7 @@ LOGIN_DETECT_COOKIES = {
     "ernie": ["BDUSS", "STOKEN", "BAIDUID"],
     "doubao": ["sessionid", "sid_tt"],
     "kimi": ["kimi-auth", "token", "access_token"],
-    "qwen": ["tongyi_sso_ticket", "b-user-id"],
+    "qwen": ["tongyi_sso_ticket"],
 }
 
 

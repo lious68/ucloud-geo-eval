@@ -44,9 +44,11 @@ def _qwen_logged_in_state():
 
 
 def _qwen_logged_out_state():
-    """未登录：只有设备/跟踪 cookie，无 SSO 票据。"""
+    """未登录/登录中途：b-user-id 在登录完成前就写入（浏览器指纹，非登录态），
+    必须不含 tongyi_sso_ticket 才判无效。"""
     fut = time.time() + 365 * 86400
     return {"cookies": [
+        _cookie("b-user-id", "www.qianwen.com", fut),   # 登录前就有，不能据此判已登录
         _cookie("cna", ".qianwen.com", fut),
         _cookie("tfstk", ".qianwen.com", fut),
         _cookie("XSRF-TOKEN", "www.qianwen.com"),

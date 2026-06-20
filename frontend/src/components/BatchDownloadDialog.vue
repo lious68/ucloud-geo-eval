@@ -2,14 +2,16 @@
   <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)"
              title="添加批次（子任务：模型 × 品类 × 题号区间）" width="820px" @open="onOpen">
     <el-alert type="info" :closable="false" style="margin-bottom:12px">
-      每个批次 = <b>一个模型</b> + <b>一个品类</b>（或全部）+ <b>题号区间</b>。
+      每个批次 = <b>一个模型</b>（或<b>全部模型</b>）+ <b>一个品类</b>（或全部）+ <b>题号区间</b>。
+      选「全部模型」时该行的品类/题区间应用到所有已配置登录态的模型，下载配置时展开成每模型一个 unit。
       同一模型可分多次下载不同品类/区间（如 豆包·海外云主机·1-12，再 豆包·海外云主机·13-20），
       导入后按 (任务,模型,问题) 自动合并，不会覆盖已导入结果。
     </el-alert>
 
     <div v-for="(row, i) in batchRows" :key="i" class="batch-row">
       <div class="row-line1">
-        <el-select v-model="row.model_key" placeholder="选模型" style="width:170px">
+        <el-select v-model="row.model_key" placeholder="选模型" style="width:200px">
+          <el-option label="全部模型 (all)" value="__all__" />
           <el-option v-for="m in readyModels" :key="m.key" :label="m.name" :value="m.key"
                      :disabled="batchRows.some((r,j)=>j!==i&&r.model_key===m.key)" />
         </el-select>
@@ -22,16 +24,17 @@
       </div>
       <div class="row-line2">
         <span class="range-hint">题号区间</span>
-        <el-input v-model="row.from" placeholder="起" size="small" style="width:60px" />
+        <el-input v-model="row.from" placeholder="起" size="small" style="width:60px" :disabled="row.model_key === '__all__'" />
         <span>-</span>
-        <el-input v-model="row.to" placeholder="止" size="small" style="width:60px" />
-        <el-button size="small" link type="primary" @click="applyRange(row)">应用区间</el-button>
+        <el-input v-model="row.to" placeholder="止" size="small" style="width:60px" :disabled="row.model_key === '__all__'" />
+        <el-button size="small" link type="primary" @click="applyRange(row)" :disabled="row.model_key === '__all__'">应用区间</el-button>
         <el-button size="small" link @click="selectAll(row)">全选该品类</el-button>
         <el-button size="small" link @click="row.question_ids=[]">清空</el-button>
         <span class="range-count">已选 {{ row.question_ids.length }}/{{ poolQids(row).length }}</span>
       </div>
       <el-select v-model="row.question_ids" multiple collapse-tags collapse-tags-tooltip
-                 placeholder="题区间（默认=该品类全部）" style="width:100%;margin-top:4px">
+                 :placeholder="row.model_key === '__all__' ? '题区间（all=该品类全部题，每个模型相同）' : '题区间（默认=该品类全部）'"
+                 style="width:100%;margin-top:4px">
         <el-option v-for="qid in poolQids(row)" :key="qid" :label="qid" :value="qid" />
       </el-select>
     </div>
@@ -138,11 +141,26 @@ async function downloadBatch() {
   for (const r of rows) per_model[r.model_key] = r.question_ids.length ? r.question_ids : [...poolQids(r)]
   // 校验非空
   for (const mk in per_model) if (!per_model[mk].length) return ElMessage.warning(`模型 ${mk} 所选品类下无题目`)
+
+  // 「all」展开成全部已配置登录态的模型，每个模型沿用同一题区间；
+  // 显式选过的模型优先（不重复）。
+  const ALL_KEY = '__all__'
+  const explicitKeys = Object.keys(per_model).filter(k => k !== ALL_KEY)
+  const finalPerModel = {}
+  for (const k of explicitKeys) finalPerModel[k] = per_model[k]
+  if (ALL_KEY in per_model) {
+    for (const m of readyModels.value) {
+      if (m.key in finalPerModel) continue
+      finalPerModel[m.key] = per_model[ALL_KEY]
+    }
+  }
+  if (!Object.keys(finalPerModel).length) return ElMessage.warning('暂无已配置登录态的模型可展开「all」')
+
   downloading.value = true
   try {
     const res = await createBatch(props.taskId, {
-      model_keys: Object.keys(per_model),
-      per_model_question_ids: per_model,
+      model_keys: Object.keys(finalPerModel),
+      per_model_question_ids: finalPerModel,
       delay: delay.value,
     })
     if (!res?.success) return ElMessage.error(res?.detail || '生成配置失败')

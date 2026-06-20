@@ -34,6 +34,7 @@ class _FakeClient:
     def __init__(self, is_logged_in_seq):
         # is_logged_in_seq: 每次调用返回的 bool 序列（True=已登录）
         self._seq = list(is_logged_in_seq)
+        self._last = False  # 序列耗尽后保持上一次的值（登录后稳定为 True，符合真实）
         self._page = _FakePage()
         self._context = _FakeCtx()
         self.goto_calls = 0
@@ -48,8 +49,8 @@ class _FakeClient:
 
     async def _is_logged_in(self, page, timeout=15):
         if self._seq:
-            return self._seq.pop(0)
-        return False  # 序列耗尽后保持 False（模拟始终未登录）
+            self._last = self._seq.pop(0)
+        return self._last
 
     async def close(self):
         pass

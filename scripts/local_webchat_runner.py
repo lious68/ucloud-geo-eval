@@ -249,14 +249,20 @@ async def _login_flow(client, mk: str, max_wait: int = 300) -> bool:
         elapsed += 3
         try:
             if await client._is_logged_in(client._page, timeout=5):
-                try:
-                    state = await client._context.storage_state()
-                    save_auth_state(mk, state)
-                    print(f"  ✅ {name} 登录已检测并保存（{len(state.get('cookies', []))} cookies）")
-                    return True
-                except Exception as e:
-                    print(f"  ❌ {name} 保存登录态失败: {e}")
-                    return False
+                # 等 3s 让登录跳转回流把 token/cookie 写全，再复确认一次，
+                # 避免抢救"刚出现弱信号但还没写完"的中途态。
+                await asyncio.sleep(3)
+                if not await client._is_logged_in(client._page, timeout=5):
+                    print(f"    ⚠️ {name} 登录态未稳定，继续等待...")
+                else:
+                    try:
+                        state = await client._context.storage_state()
+                        save_auth_state(mk, state)
+                        print(f"  ✅ {name} 登录已检测并保存（{len(state.get('cookies', []))} cookies）")
+                        return True
+                    except Exception as e:
+                        print(f"  ❌ {name} 保存登录态失败: {e}")
+                        return False
         except Exception as e:
             print(f"    ⚠️ {name} 探测异常（继续等待）: {e}")
         print(f"    ... 等待 {name} 登录（{max_wait - elapsed}s）")

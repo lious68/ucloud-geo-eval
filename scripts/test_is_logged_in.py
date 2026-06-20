@@ -75,7 +75,44 @@ async def main():
     await c._is_logged_in(page, timeout=1)
     assert page.goto_calls == 0, "_is_logged_in 不应导航"
 
-    print("✅ PASS: _is_logged_in 登录页/正常页/不可见/异常均判定正确，且不导航")
+    # ── kimi 子类覆盖：查 localStorage access_token/msh_user_id，不看输入框 ──
+    # 证据：diag_kimi_login_state.py 登录后 localStorage 有 access_token+msh_user_id；
+    # 登录前只有 anonymous_access_token。kimi-auth cookie 与输入框可见都是弱信号。
+    from web_chat_clients import KimiWebChatClient
+
+    class _KimiFakePage:
+        def __init__(self, url, has_real_token):
+            self.url = url
+            self._has = has_real_token
+
+        async def evaluate(self, js):
+            return self._has
+
+    class _KimiFakePageExc:
+        url = "https://www.kimi.com/"
+
+        async def evaluate(self, js):
+            raise RuntimeError("page gone")
+
+    kc = KimiWebChatClient("kimi")
+
+    # 6. kimi：localStorage 有 access_token → True（即使输入框探测不存在）
+    assert await kc._is_logged_in(_KimiFakePage("https://www.kimi.com/", True), timeout=1) is True, \
+        "kimi 有 access_token 应判已登录"
+
+    # 7. kimi：只有 anonymous token（has_real=False）→ False（核心：堵住落地页误判）
+    assert await kc._is_logged_in(_KimiFakePage("https://www.kimi.com/", False), timeout=1) is False, \
+        "kimi 无 access_token 应判未登录"
+
+    # 8. kimi：URL 在登录页即使有 token → False
+    assert await kc._is_logged_in(_KimiFakePage("https://www.kimi.com/passport/login", True), timeout=1) is False, \
+        "kimi 登录页 URL 应判未登录"
+
+    # 9. kimi：evaluate 抛错 → False（不向上抛）
+    assert await kc._is_logged_in(_KimiFakePageExc(), timeout=1) is False, \
+        "kimi evaluate 异常应判未登录"
+
+    print("✅ PASS: _is_logged_in 基类(登录页/正常页/不可见/异常/不导航) + kimi(localStorage access_token) 均正确")
 
 
 if __name__ == "__main__":

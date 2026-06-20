@@ -332,6 +332,28 @@ class KimiWebChatClient(WebChatClientBase):
     NEW_CHAT_SELECTOR = "a[href='/'], button[class*='new-chat'], [class*='create-conversation'], [data-testid='new-chat']"
     SEARCH_INDICATOR = "[class*='searching'], [class*='search-indicator'], [class*='web-search']"
 
+    async def _is_logged_in(self, page: Page, timeout: int = 15) -> bool:
+        """kimi 真实登录态探测（覆盖基类的"输入框可见"弱信号）。
+
+        kimi-auth cookie 登录中途就出现、聊天输入框落地页就可见，都是弱信号——
+        会导致 _login_flow 抢救半成品 state（实测：误存 6 cookie + 只有 anonymous
+        token 的 localStorage，评测时发不出请求）。kimi 是 SPA，真正会话凭证在
+        localStorage：access_token(JWT)/msh_user_id 仅完整登录后写入；
+        anonymous_access_token 是匿名态，不算登录。
+        证据：diag_kimi_login_state.py 登录后 localStorage 有 access_token+
+        refresh_token+msh_user_id、loginBtn=False avatar=True；登录前只有 anonymous_*。
+        """
+        url = page.url or ""
+        if any(h in url for h in self.LOGIN_URL_HINTS):
+            return False
+        try:
+            has_real = await page.evaluate(
+                "() => !!(localStorage.getItem('access_token') || localStorage.getItem('msh_user_id'))"
+            )
+            return bool(has_real)
+        except Exception:
+            return False
+
     async def _navigate_to_chat(self, page: Page):
         """导航到 Kimi 新对话页面"""
         try:

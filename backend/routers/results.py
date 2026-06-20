@@ -377,13 +377,20 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
 
 
 @router.get("/{run_id}/question-drilldown")
-async def get_question_drilldown(run_id: str, model_key: str):
-    """问题级下钻：获取某渠道每道题的指标计数（分子/分母）和回答摘要"""
-    run = await db.get_run(run_id)
-    if not run:
-        raise HTTPException(404, "评测不存在")
+async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[str] = None):
+    """问题级下钻：获取某渠道每道题的指标计数（分子/分母）和回答摘要。
 
-    all_results = await db.get_results(run_id, model_key)
+    task_id 模式：按大任务聚合该模型的全部 analysis_results（跨批次，
+    (task_id,model,question) 唯一去重），run_id 传 "0" 占位、不做 run 存在性校验。
+    """
+    if task_id:
+        all_results = await db.get_task_results(task_id, model_key)
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        all_results = await db.get_results(run_id, model_key)
+
     if not all_results:
         return {"success": True, "data": {"model_name": model_key, "total_questions": 0, "questions": []}}
 

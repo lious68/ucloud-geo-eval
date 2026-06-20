@@ -487,10 +487,6 @@ function toggleAnswerExpand(questionId) {
 }
 
 async function openDrilldown(modelKey) {
-  if (route.query.task_id) {
-    ElMessage.info('任务级结果暂不支持问题下钻')
-    return
-  }
   drilldownModelKey.value = modelKey
   // 从 scores 中找到 model_name
   const s = scores.value.find(s => s.model_key === modelKey)
@@ -502,9 +498,14 @@ async function openDrilldown(modelKey) {
   drilldownLoading.value = true
 
   try {
+    const taskId = route.query.task_id
     const runId = latestRun.value?.id
-    if (!runId) return
-    const res = await apiFetch(`/results/${runId}/question-drilldown?model_key=${modelKey}`)
+    if (!taskId && !runId) return
+    // task 模式：按大任务聚合（跨批次去重），run_id 传 0 占位 + task_id 参数
+    const url = taskId
+      ? `/results/0/question-drilldown?model_key=${modelKey}&task_id=${encodeURIComponent(taskId)}`
+      : `/results/${runId}/question-drilldown?model_key=${modelKey}`
+    const res = await apiFetch(url)
     drilldownData.value = res.data || null
   } catch (e) {
     console.error('Drilldown error:', e)

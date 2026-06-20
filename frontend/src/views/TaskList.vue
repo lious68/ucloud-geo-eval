@@ -28,9 +28,6 @@
                   <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">
                     ➕ 添加批次
                   </el-button>
-                  <el-button v-if="row.coverage_rate > 0" size="small" type="primary" @click="viewResult(row)">
-                    📊 查看结果
-                  </el-button>
                 </div>
               </div>
 
@@ -155,9 +152,12 @@
             <span style="font-size:12px;color:#999">{{ row.done_cells }}/{{ row.total_cells }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250">
+        <el-table-column label="操作" width="320">
           <template #default="{ row }">
             <el-button size="small" @click="$router.push(`/tasks/${row.id}`)">详情</el-button>
+            <el-button v-if="row.coverage_rate > 0" size="small" type="primary" @click="viewResult(row)">
+              📊 查看结果
+            </el-button>
             <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">添加批次</el-button>
             <el-button v-if="isAdmin()" size="small" type="danger" plain @click="onDel(row)">删</el-button>
           </template>

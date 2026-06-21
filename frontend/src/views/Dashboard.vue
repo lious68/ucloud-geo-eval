@@ -1,6 +1,6 @@
 <template>
   <div class="dashboard">
-    <h2 class="page-title">📊 GEO 评估仪表盘</h2>
+    <h2 class="page-title"><el-icon><DataAnalysis /></el-icon> GEO 评估仪表盘</h2>
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-state">
       <el-icon class="is-loading" :size="32"><Loading /></el-icon>
@@ -25,7 +25,7 @@
           <el-col :span="6" v-for="m in metricDefinitions" :key="m.key">
             <el-card shadow="hover" class="intro-card">
               <div class="intro-card-header">
-                <span class="intro-icon">{{ m.icon }}</span>
+                <el-icon class="intro-icon"><component :is="m.icon" /></el-icon>
                 <span class="intro-label">{{ m.label }}</span>
                 <el-tooltip placement="top" :width="320" effect="light">
                   <template #content>
@@ -36,7 +36,7 @@
                       <div v-if="m.example" class="formula-example">{{ m.example }}</div>
                     </div>
                   </template>
-                  <span class="formula-trigger">ⓘ</span>
+                  <el-icon class="formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </div>
               <p class="intro-desc">{{ m.brief }}</p>
@@ -71,7 +71,7 @@
           <el-col :span="5" v-for="m in coreMetrics" :key="m.key">
             <el-card shadow="hover" class="metric-card" :class="'metric-' + m.key">
               <div class="metric-card-header">
-                <span class="metric-icon">{{ m.icon }}</span>
+                <el-icon class="metric-icon"><component :is="m.icon" /></el-icon>
                 <span class="metric-label">{{ m.label }}</span>
                 <el-tooltip placement="top" :width="340" effect="light">
                   <template #content>
@@ -83,7 +83,7 @@
                       <div class="formula-weight">GEO权重: {{ m.weight }}%</div>
                     </div>
                   </template>
-                  <span class="formula-trigger">ⓘ</span>
+                  <el-icon class="formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </div>
               <div class="metric-value">{{ m.displayValue }}</div>
@@ -97,7 +97,7 @@
           <el-col :span="4">
             <el-card shadow="hover" class="metric-card metric-geo_score">
               <div class="metric-card-header">
-                <span class="metric-icon">🏆</span>
+                <el-icon class="metric-icon"><Trophy /></el-icon>
                 <span class="metric-label">GEO 综合得分</span>
                 <el-tooltip placement="top" :width="380" effect="light">
                   <template #content>
@@ -108,7 +108,7 @@
                       <div class="formula-weight">加权系数: 提及率45%、引用率25%、TOP3 推荐率20%、情感值10%</div>
                     </div>
                   </template>
-                  <span class="formula-trigger">ⓘ</span>
+                  <el-icon class="formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </div>
               <div class="metric-value geo-value">{{ geoAverageScore }}</div>
@@ -142,7 +142,7 @@
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘100转为0-100分制</div>
                     </div>
                   </template>
-                  <span class="col-formula-trigger">ⓘ</span>
+                  <el-icon class="col-formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
@@ -162,7 +162,7 @@
                       <div class="formula-weight">GEO权重: 45%</div>
                     </div>
                   </template>
-                  <span class="col-formula-trigger">ⓘ</span>
+                  <el-icon class="col-formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
@@ -182,7 +182,7 @@
                       <div class="formula-weight">GEO权重: 25%</div>
                     </div>
                   </template>
-                  <span class="col-formula-trigger">ⓘ</span>
+                  <el-icon class="col-formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
@@ -202,7 +202,7 @@
                       <div class="formula-weight">GEO权重: 20%</div>
                     </div>
                   </template>
-                  <span class="col-formula-trigger">ⓘ</span>
+                  <el-icon class="col-formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
@@ -222,7 +222,7 @@
                       <div class="formula-weight">GEO权重: 10%</div>
                     </div>
                   </template>
-                  <span class="col-formula-trigger">ⓘ</span>
+                  <el-icon class="col-formula-trigger"><InfoFilled /></el-icon>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
@@ -237,7 +237,7 @@
             <el-table-column label="明细" width="90" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="openDrilldown(row.model_key)">
-                  📋 查看
+                  <el-icon><View /></el-icon> 查看
                 </el-button>
               </template>
             </el-table-column>
@@ -533,7 +533,7 @@ const channelDetails = computed(() => {
 // ===== 指标定义（含公式说明） =====
 const metricDefinitions = [
   {
-    key: 'coverage_rate', label: '提及率', icon: '📡',
+    key: 'coverage_rate', label: '提及率', icon: 'Aim',
     brief: 'UCloud 被提及的有效响应比例',
     formula: '提及率 = UCloud 被提及的自然有效响应数 / 自然有效响应总数',
     description: '仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母',
@@ -541,7 +541,7 @@ const metricDefinitions = [
     weight: 45,
   },
   {
-    key: 'citation_rate', label: '引用率', icon: '🔗',
+    key: 'citation_rate', label: '引用率', icon: 'Link',
     brief: '包含UCloud引用/链接的响应比例',
     formula: '引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数',
     description: '官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入',
@@ -549,7 +549,7 @@ const metricDefinitions = [
     weight: 25,
   },
   {
-    key: 'recommendation_rate', label: 'TOP3 推荐率', icon: '👍',
+    key: 'recommendation_rate', label: 'TOP3 推荐率', icon: 'Medal',
     brief: '品牌进入 Top3 的回答比例',
     formula: 'TOP3 推荐率 = 品牌进入 Top3 的自然回答次数 / 自然有效回答总次数',
     description: '仅统计自然问题中 UCloud 在回答中进入品牌推荐列表 Top3 的比例；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母',
@@ -557,7 +557,7 @@ const metricDefinitions = [
     weight: 20,
   },
   {
-    key: 'sentiment_score', label: '情感值', icon: '💛',
+    key: 'sentiment_score', label: '情感值', icon: 'Sunny',
     brief: '全部有效响应的平均情感倾向',
     formula: '情感值 = Σ(全部有效响应的情感分数) / 全部有效响应数',
     description: 'Q1-Q10 引导型问题正常显示并参与统计，范围0-1，>0.6为正面，0.4-0.6为中性，<0.4为负面',
@@ -731,8 +731,8 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
-.section-title { font-size: 16px; font-weight: 600; color: #1a1a2e; margin-bottom: 14px; padding-left: 2px; }
+.page-title { font-size: var(--fs-page-title); margin-bottom: 20px; color: var(--color-text); display: flex; align-items: center; gap: 8px; }
+.section-title { font-size: var(--fs-section-title); font-weight: 600; color: var(--color-text); margin-bottom: 14px; padding-left: 2px; }
 .run-breadcrumb { font-size: 13px; color: #666; margin-bottom: 16px; display: flex; align-items: center; }
 
 /* 加载/空状态 */
@@ -745,9 +745,9 @@ onMounted(loadData)
 .metric-card { text-align: center; padding: 6px 10px; position: relative; border-radius: 10px; transition: transform 0.2s; }
 .metric-card:hover { transform: translateY(-3px); }
 .metric-card-header { display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 8px; }
-.metric-icon { font-size: 18px; }
+.metric-icon { font-size: 18px; color: var(--color-primary); }
 .metric-label { font-size: 13px; color: #666; font-weight: 500; }
-.metric-value { font-size: 28px; font-weight: 700; color: #1a1a2e; margin: 4px 0; }
+.metric-value { font-size: 28px; font-weight: 700; color: var(--color-text); margin: 4px 0; }
 .metric-value.geo-value { color: #e6a23c; }
 .metric-best { font-size: 11px; color: #888; margin-bottom: 6px; }
 .metric-bar-wrap { height: 4px; background: #eee; border-radius: 2px; overflow: hidden; }
@@ -781,31 +781,31 @@ onMounted(loadData)
 
 /* 公式 tooltip 内容 */
 .formula-tooltip { font-size: 13px; line-height: 1.6; }
-.formula-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; color: #1a1a2e; }
+.formula-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; color: var(--color-text); }
 .formula-expr {
   background: #f0f5ff; border-left: 3px solid #409eff;
   padding: 6px 10px; margin: 6px 0; border-radius: 4px;
   font-family: 'Consolas', 'Monaco', monospace; font-size: 13px;
-  color: #1a1a2e;
+  color: var(--color-text);
 }
 .formula-desc { color: #666; font-size: 12px; margin-top: 4px; }
 .formula-example { color: #999; font-size: 12px; margin-top: 4px; font-style: italic; }
 .formula-weight { color: #e6a23c; font-size: 12px; margin-top: 6px; font-weight: 600; }
 
 /* 渠道名称 */
-.channel-name { font-weight: 600; color: #1a1a2e; }
+.channel-name { font-weight: 600; color: var(--color-text); }
 .score-good { color: #67c23a; }
 .score-low { color: #f56c6c; }
 
 /* 空状态下的指标说明卡片 */
 .intro-card { padding: 14px; border-radius: 10px; }
 .intro-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-.intro-icon { font-size: 20px; }
-.intro-label { font-size: 14px; font-weight: 600; color: #1a1a2e; }
+.intro-icon { font-size: 20px; color: var(--color-primary); }
+.intro-label { font-size: 14px; font-weight: 600; color: var(--color-text); }
 .intro-desc { font-size: 12px; color: #999; line-height: 1.5; }
 
 /* ===== 引用详情区 ===== */
-.collapse-title { font-weight: 600; font-size: 14px; color: #1a1a2e; }
+.collapse-title { font-weight: 600; font-size: 14px; color: var(--color-text); }
 .question-text { font-size: 13px; color: #333; }
 .citation-item { margin-bottom: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .cit-type-tag { flex-shrink: 0; }

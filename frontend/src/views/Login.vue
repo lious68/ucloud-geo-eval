@@ -2,9 +2,9 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <span class="logo-icon">🎯</span>
+        <el-icon class="logo-icon"><Aim /></el-icon>
         <h2>UCloud GEO 评估系统</h2>
-        <p v-if="isFirstLogin" style="color:#e6a23c;font-size:13px;margin-top:8px">首次使用，请设置管理密码</p>
+        <p v-if="isFirstLogin" class="first-login-tip">首次使用，请设置管理密码</p>
       </div>
       <el-form @submit.prevent="handleLogin">
         <el-form-item>
@@ -89,8 +89,9 @@ async function handleLogin() {
 
 <style scoped>
 .login-page { display: flex; justify-content: center; align-items: center; min-height: 100vh; background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%); }
-.login-card { background: #fff; border-radius: 16px; padding: 40px; width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+.login-card { background: var(--color-card); border-radius: var(--radius-lg); padding: 40px; width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
 .login-header { text-align: center; margin-bottom: 30px; }
-.login-header .logo-icon { font-size: 48px; }
-.login-header h2 { color: #1a1a2e; margin-top: 12px; }
+.login-header .logo-icon { font-size: 48px; color: var(--color-primary); }
+.login-header h2 { color: var(--color-text); margin-top: 12px; }
+.first-login-tip { color: #e6a23c; font-size: 13px; margin-top: 8px; }
 </style>

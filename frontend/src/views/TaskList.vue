@@ -1,13 +1,13 @@
 <template>
   <div class="task-list">
-    <h2 class="page-title">🚀 执行评测（任务 → 批次 → 问题）</h2>
+    <h2 class="page-title"><el-icon><Promotion /></el-icon> 执行评测（任务 → 批次 → 问题）</h2>
 
     <el-card>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <span style="font-weight:600">任务列表（点行首 ▸ 展开看批次 / 子任务）</span>
         <div>
           <el-button v-if="isAdmin()" type="warning" plain :loading="recalculating" @click="onRecalcAll">
-            🔄 重算全部评分
+            <el-icon><Refresh /></el-icon> 重算全部评分
           </el-button>
           <el-button v-if="isAdmin()" type="primary" @click="openWizard">
             <el-icon><Plus /></el-icon> 新建任务
@@ -31,7 +31,7 @@
                 </span>
                 <div>
                   <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">
-                    ➕ 添加批次
+                    <el-icon><Plus /></el-icon> 添加批次
                   </el-button>
                 </div>
               </div>
@@ -46,7 +46,7 @@
                     <div class="batch-results-box">
                       <div v-if="batchResultsLoading[b.batch_id]" class="batch-results-tip">加载中…</div>
                       <div v-else-if="!(batchResultsOf(b.batch_id) || []).length" class="batch-results-tip">
-                        暂无导入结果，点该批次「📥 导入」上传本地 runner 产出的 JSON
+                        暂无导入结果，点该批次「导入」上传本地 runner 产出的 JSON
                       </div>
                       <div v-else>
                         <div class="batch-results-head">
@@ -66,7 +66,7 @@
                             </span>
                           </div>
                           <div class="result-q"><b>题目：</b>{{ r.question_text || '(题目原文缺失)' }}</div>
-                          <div v-if="r.error_message" class="result-error">⚠ {{ r.error_message }}</div>
+                          <div v-if="r.error_message" class="result-error"><el-icon><WarningFilled /></el-icon> {{ r.error_message }}</div>
                           <div v-else class="result-ans"><b>模型回答：</b>
                             <pre class="result-pre">{{ r.raw_content || '(空)' }}</pre>
                           </div>
@@ -74,7 +74,7 @@
                       </div>
                       <div class="import-logs-box">
                         <div class="import-logs-head">
-                          📥 导入历史（{{ (batchImportLogsOf(b.batch_id) || []).length }} 次）
+                          <el-icon><Upload /></el-icon> 导入历史（{{ (batchImportLogsOf(b.batch_id) || []).length }} 次）
                         </div>
                         <div v-if="batchImportLogsLoading[b.batch_id]" class="batch-results-tip">加载中…</div>
                         <div v-else-if="!(batchImportLogsOf(b.batch_id) || []).length" class="batch-results-tip">暂无导入记录</div>
@@ -124,10 +124,10 @@
                 <el-table-column label="操作" width="160" fixed="right">
                   <template #default="{ row: b }">
                     <el-button v-if="isAdmin()" size="small" link type="success" @click="openImport(b)">
-                      📥 导入
+                      <el-icon><Upload /></el-icon> 导入
                     </el-button>
                     <el-button size="small" link type="primary" @click="downloadBatchConfig(b)">
-                      ⬇ 配置
+                      <el-icon><Download /></el-icon> 配置
                     </el-button>
                   </template>
                 </el-table-column>
@@ -161,7 +161,7 @@
           <template #default="{ row }">
             <el-button size="small" @click="$router.push(`/tasks/${row.id}`)">详情</el-button>
             <el-button v-if="row.coverage_rate > 0" size="small" type="primary" @click="viewResult(row)">
-              📊 查看结果
+              <el-icon><DataAnalysis /></el-icon> 查看结果
             </el-button>
             <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">添加批次</el-button>
             <el-button v-if="isAdmin()" size="small" type="danger" plain @click="onDel(row)">删</el-button>
@@ -500,7 +500,7 @@ onMounted(async () => { await load() })
 </script>
 
 <style scoped>
-.page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
+.page-title { font-size: var(--fs-page-title); margin-bottom: 20px; color: var(--color-text); display: flex; align-items: center; gap: 8px; }
 /* 展开箭头 + "展开"表头：加粗 + 蓝色系，hover/展开转深蓝（旋转由 EP 原生处理） */
 .expand-hdr { color: var(--el-color-primary); font-size: 12px; font-weight: 700; white-space: nowrap; }
 :deep(.el-table__expand-icon) {
@@ -527,7 +527,7 @@ onMounted(async () => { await load() })
 .result-flags { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
 .result-q { font-size: 13px; color: #333; margin-bottom: 6px; }
 .result-ans { font-size: 13px; color: #333; }
-.result-error { color: #c0392b; font-size: 13px; }
+.result-error { color: #c0392b; font-size: 13px; display: flex; align-items: center; gap: 4px; }
 .result-pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; border-radius: 4px; padding: 8px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
 .last-import-time { font-size: 11px; color: #a8abb2; margin-top: 2px; }
 .import-logs-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ebeef5; }

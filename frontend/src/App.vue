@@ -6,7 +6,7 @@
   <el-container v-else class="app-container">
     <el-aside width="220px" class="sidebar">
       <div class="logo">
-        <span class="logo-icon">🎯</span>
+        <el-icon class="logo-icon"><Aim /></el-icon>
         <span class="logo-text">UCloud GEO</span>
       </div>
       <el-menu :default-active="currentRoute" router class="sidebar-menu">
@@ -39,9 +39,9 @@
       <!-- 评测运行状态全局指示器 -->
       <div v-if="evalStore.running" class="eval-indicator" @click="goToEval">
         <div class="eval-indicator-header">
-          <span class="eval-indicator-icon">🚀</span>
+          <el-icon class="eval-indicator-icon"><Promotion /></el-icon>
           <span class="eval-indicator-title">评测运行中</span>
-          <el-tag v-if="evalStore.evalMode === 'webchat'" size="small" type="info">🌐</el-tag>
+          <el-tag v-if="evalStore.evalMode === 'webchat'" size="small" type="info" class="mode-tag"><el-icon><Monitor /></el-icon></el-tag>
         </div>
         <el-progress :percentage="evalStore.progressPercent" :stroke-width="8"
           :status="evalStore.progressPercent >= 100 ? 'success' : ''"
@@ -50,7 +50,7 @@
         <div class="eval-indicator-heartbeat">
           <span :class="evalStore.heartbeatActive ? 'hb-dot active' : (evalStore.heartbeatStalled ? 'hb-dot stalled' : 'hb-dot inactive')"></span>
           <span v-if="evalStore.heartbeatActive" class="hb-text ok">进程活跃</span>
-          <span v-else-if="evalStore.heartbeatStalled" class="hb-text warn">⚠️ 可能挂了</span>
+          <span v-else-if="evalStore.heartbeatStalled" class="hb-text warn"><el-icon><WarningFilled /></el-icon> 可能挂了</span>
           <span v-else class="hb-text wait">等待进度...</span>
           <span class="hb-time">{{ evalStore.lastUpdateTime || '—' }}</span>
         </div>
@@ -116,21 +116,35 @@ async function handleLogout() {
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; }
+:root {
+  --color-primary: #409eff;
+  --color-primary-soft: rgba(64, 158, 255, 0.1);
+  --color-text: #1a1a2e;
+  --color-text-sec: #666;
+  --color-border: #ebeef5;
+  --color-page-bg: #f0f2f5;
+  --color-card: #fff;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --fs-page-title: 22px;
+  --fs-section-title: 16px;
+  --space: 16px;
+}
+body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--color-page-bg); color: var(--color-text); }
 .app-container { height: 100vh; }
 .sidebar { background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%); overflow-y: auto; display: flex; flex-direction: column; }
-.sidebar .logo { padding: 20px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); }
-.sidebar .logo-icon { font-size: 28px; }
-.sidebar .logo-text { color: #fff; font-size: 18px; font-weight: 700; margin-left: 8px; }
+.sidebar .logo { padding: 20px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; gap: 8px; }
+.sidebar .logo .el-icon { font-size: 24px; color: var(--color-primary); }
+.sidebar .logo-text { color: #fff; font-size: 18px; font-weight: 700; }
 .sidebar-menu { border-right: none !important; flex: 1; }
 .sidebar .el-menu { background: transparent; }
-.sidebar .el-menu-item { color: rgba(255,255,255,0.7); }
+.sidebar .el-menu-item { color: rgba(255,255,255,0.7); border-radius: 8px; margin: 2px 8px; }
 .sidebar .el-menu-item:hover { color: #fff; background: rgba(255,255,255,0.1); }
-.sidebar .el-menu-item.is-active { color: #fff; background: rgba(15,52,96,0.6); border-right: 3px solid #409eff; }
+.sidebar .el-menu-item.is-active { color: #fff; background: rgba(15,52,96,0.6); border-right: 3px solid var(--color-primary); }
 .sidebar-footer { padding: 12px; border-top: 1px solid rgba(255,255,255,0.1); }
 .user-info { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; }
 .user-name { color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 600; line-height: 24px; }
-.main-content { padding: 24px; overflow-y: auto; background: #f0f2f5; }
+.main-content { padding: var(--space); overflow-y: auto; background: var(--color-page-bg); }
 </style>
 
 <style scoped>
@@ -153,7 +167,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft
   gap: 6px;
   margin-bottom: 4px;
 }
-.eval-indicator-icon { font-size: 16px; }
+.eval-indicator-icon { font-size: 16px; color: var(--color-primary); }
+.mode-tag .el-icon { font-size: 12px; vertical-align: middle; }
 .eval-indicator-title {
   font-size: 13px;
   font-weight: 600;

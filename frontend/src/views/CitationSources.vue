@@ -1,6 +1,6 @@
 <template>
   <div class="citation-sources">
-    <h2 class="page-title">🔗 引用源情况</h2>
+    <h2 class="page-title"><el-icon><Link /></el-icon> 引用源情况</h2>
     <p class="page-subtitle">汇总评测问题中被引用的平台来源，支持按时间、AI 渠道和来源名称筛选</p>
     <el-alert type="warning" :closable="false" style="margin-bottom:16px">
       仅作优化方向参考，文心一言、豆包、千问受平台限制展示不全
@@ -130,10 +130,10 @@
         </el-card>
 
         <!-- 下钻弹窗 -->
-        <el-dialog v-model="drilldownVisible" :title="`📎 ${drilldownSource} 引用详情`" width="820px" top="6vh">
+        <el-dialog v-model="drilldownVisible" :title="drilldownTitle" width="820px" top="6vh">
           <div v-if="drilldownLoading" style="text-align:center;padding:30px">
             <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-            <p style="color:#64748b;margin-top:10px">正在加载...</p>
+            <p style="color:var(--color-text-sec);margin-top:10px">正在加载...</p>
           </div>
           <template v-else>
             <el-collapse v-for="(data, mk) in drilldownData" :key="mk">
@@ -190,6 +190,7 @@ const drilldownVisible = ref(false)
 const drilldownSource = ref('')
 const drilldownData = ref({})
 const drilldownLoading = ref(false)
+const drilldownTitle = computed(() => `${drilldownSource.value} 引用详情`)
 
 const platformColors = ['#5b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6']
 const fixedPlatforms = [
@@ -313,8 +314,7 @@ function initDateRange() {
 }
 
 function sourceLabel(src) {
-  const icon = src.kind === 'task' ? '🅣' : (src.mode === 'webchat' ? '🌐' : '🔗')
-  return `${icon} ${src.name} (${src.date})`
+  return `${src.name} (${src.date})`
 }
 
 function onSourceChange(id) {
@@ -453,24 +453,24 @@ async function openDrilldown(source) {
 </script>
 
 <style scoped>
-.page-title { font-size: 28px; margin-bottom: 6px; color: #0f172a; font-weight: 800; }
-.page-subtitle { color: #64748b; margin-bottom: 22px; }
+.page-title { font-size: var(--fs-page-title); margin-bottom: 6px; color: var(--color-text); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.page-subtitle { color: var(--color-text-sec); margin-bottom: 22px; }
 .filter-card { margin-bottom: 20px; }
 .filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .filter-item { display: flex; align-items: center; gap: 8px; }
-.filter-label { color: #64748b; font-weight: 600; white-space: nowrap; }
+.filter-label { color: var(--color-text-sec); font-weight: 600; white-space: nowrap; }
 .platform-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .search-input { width: 240px; }
-.loading-state { text-align: center; padding: 80px 0; color: #64748b; }
+.loading-state { text-align: center; padding: 80px 0; color: var(--color-text-sec); }
 .stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-bottom: 20px; }
-.stat-label { color: #64748b; margin-bottom: 10px; }
-.stat-value { font-size: 30px; font-weight: 800; color: #0f172a; }
+.stat-label { color: var(--color-text-sec); margin-bottom: 10px; }
+.stat-value { font-size: 30px; font-weight: 800; color: var(--color-text); }
 .chart-layout { display: grid; grid-template-columns: 2.1fr 1.1fr; gap: 20px; }
 .chart { width: 100%; }
 .chart-large { height: 420px; }
 .chart-pie { height: 260px; }
 .platform-list { margin-top: 10px; }
-.platform-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: #334155; }
+.platform-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--color-text); }
 .platform-name { flex: 1; }
 .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 .sample-url { line-height: 1.6; }

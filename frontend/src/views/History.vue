@@ -1,6 +1,6 @@
 <template>
   <div class="history">
-    <h2 class="page-title">🕐 历史评测情况</h2>
+    <h2 class="page-title"><el-icon><Clock /></el-icon> 历史评测情况</h2>
 
     <el-card v-if="!runs.length && !loading" style="text-align:center;padding:40px">
       <el-empty description="暂无评测记录" :image-size="80">
@@ -20,7 +20,7 @@
           <el-table-column prop="name" label="名称" width="140" />
           <el-table-column label="模式" width="80">
             <template #default="{ row }">
-              <el-tag v-if="row.mode === 'webchat'" type="info" size="small">🌐 WebChat</el-tag>
+              <el-tag v-if="row.mode === 'webchat'" type="info" size="small"><el-icon><Monitor /></el-icon> WebChat</el-tag>
               <el-tag v-else size="small">API</el-tag>
             </template>
           </el-table-column>
@@ -58,7 +58,7 @@
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
               <el-button size="small" type="primary" @click="viewResult(row.id)" :disabled="row.status!=='completed'">
-                📊 查看
+                <el-icon><DataAnalysis /></el-icon> 查看
               </el-button>
               <el-button v-if="isAdmin()" size="small" type="danger" @click="deleteRun(row.id)">删除</el-button>
             </template>
@@ -68,7 +68,7 @@
 
       <!-- 对比区 -->
       <div class="compare-section" v-if="completedRuns.length >= 2" style="margin-top:20px">
-        <h3 class="section-title">📈 评测趋势对比</h3>
+        <h3 class="section-title"><el-icon><TrendCharts /></el-icon> 评测趋势对比</h3>
         <el-card>
           <div ref="trendChartRef" style="height:300px"></div>
         </el-card>
@@ -256,8 +256,8 @@ onMounted(loadRuns)
 </script>
 
 <style scoped>
-.page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
-.section-title { font-size: 16px; font-weight: 600; color: #1a1a2e; margin-bottom: 14px; padding-left: 2px; }
+.page-title { font-size: var(--fs-page-title); margin-bottom: 20px; color: var(--color-text); display: flex; align-items: center; gap: 8px; }
+.section-title { font-size: var(--fs-section-title); font-weight: 600; color: var(--color-text); margin-bottom: 14px; padding-left: 2px; display: flex; align-items: center; gap: 8px; }
 .metric-trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 .score-good { color: #67c23a; font-weight: 600; }
 .score-low { color: #f56c6c; }

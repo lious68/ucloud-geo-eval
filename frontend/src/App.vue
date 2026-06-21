@@ -128,8 +128,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft
 .sidebar .el-menu-item:hover { color: #fff; background: rgba(255,255,255,0.1); }
 .sidebar .el-menu-item.is-active { color: #fff; background: rgba(15,52,96,0.6); border-right: 3px solid #409eff; }
 .sidebar-footer { padding: 12px; border-top: 1px solid rgba(255,255,255,0.1); }
-.user-info { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
-.user-name { color: rgba(255,255,255,0.8); font-size: 14px; }
+.user-info { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; }
+.user-name { color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 600; line-height: 24px; }
 .main-content { padding: 24px; overflow-y: auto; background: #f0f2f5; }
 </style>
 

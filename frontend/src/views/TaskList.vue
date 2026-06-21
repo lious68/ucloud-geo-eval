@@ -480,16 +480,18 @@ onMounted(async () => { await load() })
 
 <style scoped>
 .page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
-/* 展开箭头：干净的 chevron 图标，hover/展开转主色（旋转由 EP 原生处理） */
-.expand-hdr { color: #a8abb2; font-size: 12px; font-weight: 500; white-space: nowrap; }
+/* 展开箭头 + "展开"表头：加粗 + 蓝色系，hover/展开转深蓝（旋转由 EP 原生处理） */
+.expand-hdr { color: var(--el-color-primary); font-size: 12px; font-weight: 700; white-space: nowrap; }
 :deep(.el-table__expand-icon) {
-  font-size: 16px;
-  color: #a8abb2;
+  font-size: 18px;
+  color: var(--el-color-primary);
+  /* SVG chevron 不吃 font-weight，用 scale 放大+加粗描边等效 */
+  transform: scale(1.18);
   transition: color .2s ease;
 }
-:deep(.el-table__expand-icon .el-icon) { font-size: 16px; }
-:deep(.el-table__expand-icon:hover) { color: var(--el-color-primary); }
-:deep(.el-table__expand-icon--expanded) { color: var(--el-color-primary); }
+:deep(.el-table__expand-icon .el-icon) { font-size: 18px; stroke: currentColor; stroke-width: 0.6; }
+:deep(.el-table__expand-icon:hover) { color: var(--el-color-primary-dark-2); }
+:deep(.el-table__expand-icon--expanded) { color: var(--el-color-primary-dark-2); }
 .expand-box { padding: 8px 16px 16px 48px; }
 .expand-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .empty-tip { color: #bbb; font-size: 13px; padding: 12px 0; }

@@ -9,9 +9,14 @@
     <el-card class="filter-card">
       <div class="filters">
         <div class="filter-item">
-          <span class="filter-label">评测轮次：</span>
-          <el-select v-model="selectedRunId" placeholder="全部轮次" clearable style="width:240px" @change="onRunChange">
-            <el-option v-for="run in completedRuns" :key="run.id" :label="runLabel(run)" :value="run.id" />
+          <span class="filter-label">数据来源：</span>
+          <el-select v-model="selectedSource" placeholder="全部（任务+轮次）" clearable style="width:260px" @change="onSourceChange">
+            <el-option-group v-if="taskSources.length" label="任务（跨批次聚合）">
+              <el-option v-for="src in taskSources" :key="src.id" :label="sourceLabel(src)" :value="src.id" />
+            </el-option-group>
+            <el-option-group v-if="runSources.length" label="评测轮次">
+              <el-option v-for="src in runSources" :key="src.id" :label="sourceLabel(src)" :value="src.id" />
+            </el-option-group>
           </el-select>
         </div>
         <div class="filter-item date-filter">
@@ -169,14 +174,16 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { apiFetch } from '../composables/useWebSocket'
+import { listTasks } from '../api/tasks'
 
 const loading = ref(true)
 const runs = ref([])
+const tasks = ref([])
 const sourceRows = ref([])
 const dateRange = ref([])
 const selectedPlatform = ref('all')
 const searchKeyword = ref('')
-const selectedRunId = ref('')
+const selectedSource = ref('')   // '' = 全部（runs+tasks）；否则 = 选中源的 id
 const topSourceChartRef = ref(null)
 const platformPieChartRef = ref(null)
 const drilldownVisible = ref(false)
@@ -194,6 +201,19 @@ const fixedPlatforms = [
 ]
 
 const completedRuns = computed(() => runs.value.filter(r => r.status === 'completed'))
+
+// 统一数据源：runs（老直连评测，status=completed）+ tasks（任务-子任务-问题架构，跨批次聚合）
+// 每项 {kind:'run'|'task', id, name, date, mode}
+const taskSources = computed(() => (tasks.value || []).map(t => ({
+  kind: 'task', id: t.id, name: t.name || '未命名任务',
+  date: toDateOnly(t.created_at), mode: 'webchat',
+})))
+const runSources = computed(() => completedRuns.value.map(r => ({
+  kind: 'run', id: r.id, name: r.name || '评测',
+  date: toDateOnly(r.completed_at || r.started_at), mode: r.mode,
+})))
+const evalSources = computed(() => [...taskSources.value, ...runSources.value])
+function findSource(id) { return evalSources.value.find(s => s.id === id) }
 const platformOptions = computed(() => [
   { key: 'all', name: '全部渠道' },
   ...fixedPlatforms.map(({ key, name }) => ({ key, name })),
@@ -223,7 +243,7 @@ const filteredRawRows = computed(() => {
   const [start, end] = dateRange.value || []
   const keyword = searchKeyword.value.trim().toLowerCase()
   return sourceRows.value.filter(row => {
-    if (selectedRunId.value && row.run_id !== selectedRunId.value) return false
+    if (selectedSource.value && row.source_id !== selectedSource.value) return false
     if (!platformMatches(row, selectedPlatform.value)) return false
     if (start && row.run_date < start) return false
     if (end && row.run_date > end) return false
@@ -288,25 +308,19 @@ function toDateOnly(ts) {
 }
 
 function initDateRange() {
-  const dates = completedRuns.value.map(r => toDateOnly(r.completed_at || r.started_at)).filter(Boolean).sort()
+  const dates = evalSources.value.map(s => s.date).filter(Boolean).sort()
   if (dates.length) dateRange.value = [dates[0], dates[dates.length - 1]]
 }
 
-function runLabel(run) {
-  const ts = run.completed_at || run.started_at
-  const d = ts ? new Date(ts) : null
-  const time = d ? `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : ''
-  const mode = run.mode === 'webchat' ? '🌐' : '🔗'
-  return `${mode} ${run.name || '评测'} (${time})`
+function sourceLabel(src) {
+  const icon = src.kind === 'task' ? '🅣' : (src.mode === 'webchat' ? '🌐' : '🔗')
+  return `${icon} ${src.name} (${src.date})`
 }
 
-function onRunChange(runId) {
-  if (runId) {
-    const run = completedRuns.value.find(r => r.id === runId)
-    if (run) {
-      const d = toDateOnly(run.completed_at || run.started_at)
-      dateRange.value = [d, d]
-    }
+function onSourceChange(id) {
+  if (id) {
+    const src = findSource(id)
+    if (src) dateRange.value = [src.date, src.date]
   } else {
     initDateRange()
   }
@@ -316,20 +330,29 @@ function onRunChange(runId) {
 async function loadData() {
   loading.value = true
   try {
-    const res = await apiFetch('/evaluations?limit=100')
+    const [res, taskRes] = await Promise.all([
+      apiFetch('/evaluations?limit=100'),
+      listTasks().catch(() => null),
+    ])
     runs.value = res.data || []
+    tasks.value = (taskRes && taskRes.data) || []
     initDateRange()
 
     const rows = []
-    for (const run of completedRuns.value) {
+    for (const src of evalSources.value) {
       try {
-        const channelsRes = await apiFetch(`/results/${run.id}/citation-channels`)
+        // task 走 ?task_id= 跨批次聚合；run 走原 run_id 路径
+        const url = src.kind === 'task'
+          ? `/results/0/citation-channels?task_id=${src.id}`
+          : `/results/${src.id}/citation-channels`
+        const channelsRes = await apiFetch(url)
         const byModel = channelsRes.data || {}
         Object.entries(byModel).forEach(([modelKey, modelData]) => {
           ;(modelData.channels || []).forEach(channel => {
             rows.push({
-              run_id: run.id,
-              run_date: toDateOnly(run.completed_at || run.started_at),
+              source_id: src.id,
+              source_kind: src.kind,
+              run_date: src.date,
               model_key: modelKey,
               model_name: modelData.model_name || modelKey,
               source: channel.channel || '其他',
@@ -339,7 +362,7 @@ async function loadData() {
             })
           })
         })
-      } catch { /* ignore single run */ }
+      } catch { /* ignore single source */ }
     }
     sourceRows.value = rows
   } finally {
@@ -401,20 +424,22 @@ async function openDrilldown(source) {
 
   try {
     const result = {}
-    const runsToQuery = selectedRunId.value
-      ? completedRuns.value.filter(r => r.id === selectedRunId.value)
-      : completedRuns.value
-    for (const run of runsToQuery) {
+    const sourcesToQuery = selectedSource.value
+      ? (findSource(selectedSource.value) ? [findSource(selectedSource.value)] : [])
+      : evalSources.value
+    for (const src of sourcesToQuery) {
       try {
-        const res = await apiFetch(`/results/${run.id}/citation-drilldown?source_channel=${encodeURIComponent(source)}`)
+        const url = src.kind === 'task'
+          ? `/results/0/citation-drilldown?source_channel=${encodeURIComponent(source)}&task_id=${src.id}`
+          : `/results/${src.id}/citation-drilldown?source_channel=${encodeURIComponent(source)}`
+        const res = await apiFetch(url)
         const data = res.data || {}
         for (const [mk, modelData] of Object.entries(data)) {
           if (!result[mk]) {
             result[mk] = { model_name: modelData.model_name, questions: [] }
           }
           for (const q of modelData.questions) {
-            // 标记评测时间
-            q.run_date = toDateOnly(run.completed_at || run.started_at)
+            q.run_date = src.date
             result[mk].questions.push(q)
           }
         }

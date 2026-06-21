@@ -235,17 +235,23 @@ async def get_citation_details(run_id: str, model_key: str = None):
 
 
 @router.get("/{run_id}/citation-channels")
-async def get_citation_channel_clustering(run_id: str, model_key: str = None):
+async def get_citation_channel_clustering(run_id: str, model_key: str = None,
+                                          task_id: Optional[str] = None):
     """引用来源渠道聚类统计
 
     仅统计 ucloud_mentioned=1 的响应中的URL（对GEO评分有贡献），
     按 URL 域名的来源渠道聚类汇总，附带每条引用的问题和完整URL
-    """
-    run = await db.get_run(run_id)
-    if not run:
-        raise HTTPException(404, "评测不存在")
 
-    all_results = await db.get_results(run_id, model_key)
+    task_id 模式：按大任务聚合该模型的全部 analysis_results（跨批次，
+    (task_id,model,question) 唯一去重），run_id 传 "0" 占位、不做 run 存在性校验。
+    """
+    if task_id:
+        all_results = await db.get_task_results(task_id, model_key)
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        all_results = await db.get_results(run_id, model_key)
 
     # 关联 questions 表获取题目文本
     db_conn = await db.get_db()
@@ -476,16 +482,23 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
 
 
 @router.get("/{run_id}/citation-drilldown")
-async def get_citation_drilldown(run_id: str, source_channel: str = Query(...)):
+async def get_citation_drilldown(run_id: str, source_channel: str = Query(...),
+                                 task_id: Optional[str] = None,
+                                 model_key: Optional[str] = None):
     """引用源下钻：按来源渠道名称筛选，返回该来源下的所有问题及引用链接
 
     source_channel 为渠道名（如"UCloud官网"、"知乎"、"阿里云"等）
-    """
-    run = await db.get_run(run_id)
-    if not run:
-        raise HTTPException(404, "评测不存在")
 
-    all_results = await db.get_results(run_id)
+    task_id 模式：按大任务聚合该模型（或全部模型）的 analysis_results（跨批次去重），
+    run_id 传 "0" 占位、不做 run 存在性校验；可选 model_key 过滤单一模型。
+    """
+    if task_id:
+        all_results = await db.get_task_results(task_id, model_key)
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        all_results = await db.get_results(run_id, model_key)
 
     # 关联 questions 表获取题目文本
     db_conn = await db.get_db()

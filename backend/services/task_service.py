@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
 import database as db
 from metrics import MetricsCalculator
-from analyzer import AnalysisResult
+from analyzer import AnalysisResult, CitationInfo
 
 
 def _new_id(prefix: str) -> str:
@@ -232,7 +232,9 @@ def _result_to_analysis(r: Dict):
         ucloud_mention_count=r.get("ucloud_mention_count", 0),
         ucloud_rank=r.get("ucloud_rank"),
         has_citation=bool(r.get("has_citation")),
+        citations=_parse_citation_infos(r.get("citations")),
         citation_count=r.get("citation_count", 0),
+        all_cited_urls=_parse_citation_infos(r.get("all_cited_urls")),
         ucloud_recommended=bool(r.get("ucloud_recommended")),
         ucloud_recommendation_strength=r.get("recommendation_strength", "none"),
         sentiment_score=r.get("sentiment_score", 0.5),
@@ -241,6 +243,40 @@ def _result_to_analysis(r: Dict):
         response_length=r.get("response_length", 0),
         raw_content=r.get("raw_content", ""),
     )
+
+
+def _parse_citation_infos(raw):
+    """DB 行的 citations/all_cited_urls（JSON 字符串或 list）→ List[CitationInfo]。
+
+    必须重建，否则 MetricsCalculator._has_effective_citation 因 result.citations 为空
+    而恒判无引用 → task citation_rate 恒 0。
+    """
+    import json as _json
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = _json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        try:
+            pos = int(c.get("position", 0))
+        except (TypeError, ValueError):
+            pos = 0
+        out.append(CitationInfo(
+            citation_type=c.get("citation_type", "url"),
+            content=c.get("content", ""),
+            position=pos,
+            source_channel=c.get("source_channel", ""),
+            is_ucloud=bool(c.get("is_ucloud", False)),
+        ))
+    return out
 
 
 def _scores_to_dict(s) -> Dict:

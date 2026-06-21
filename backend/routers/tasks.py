@@ -43,6 +43,31 @@ async def delete_task(task_id: str, user=Depends(require_admin)):
     return {"success": True}
 
 
+@router.post("/{task_id}/recalculate")
+async def recalculate_task(task_id: str, user=Depends(require_admin)):
+    """重算单个 task 的 GEO 评分（按当前 analysis_results 覆盖 geo_scores）。
+
+    用于修复历史数据：citation_rate 等指标随 _result_to_analysis/分析口径更新后，
+    无需重新导入即可刷新评分。
+    """
+    if not await db.get_task(task_id):
+        raise HTTPException(404, "任务不存在")
+    await task_service.recalculate_task_scores(task_id)
+    return {"success": True, "message": f"任务 {task_id} 评分已重算"}
+
+
+@router.post("/recalculate-all")
+async def recalculate_all_tasks(user=Depends(require_admin)):
+    """重算全部 task 的 GEO 评分（批量刷新历史数据）。"""
+    tasks = await db.list_tasks()
+    recalc = 0
+    for t in tasks:
+        await task_service.recalculate_task_scores(t["id"])
+        recalc += 1
+    return {"success": True, "data": {"recalculated": recalc},
+            "message": f"已重算 {recalc} 个任务的评分"}
+
+
 @router.post("/{task_id}/batches")
 async def create_batch(task_id: str, req: models.BatchCreate, user=Depends(require_admin)):
     """建下载批次，返回 v2 配置 JSON（前端下载，本地 runner 消费）。"""

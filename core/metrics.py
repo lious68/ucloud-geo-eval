@@ -139,25 +139,32 @@ class MetricsCalculator:
             for q in questions:
                 question_map[q.get("id", "")] = q
 
-        natural_results = []
-        for r in valid_results:
-            q = question_map.get(r.question_id, {})
-            question_text = q.get("question", "")
-            category = q.get("category", "")
-            if _is_natural_question(question_text, category):
-                natural_results.append(r)
-
-        natural_count = len(natural_results) if natural_results else len(valid_results)
+        # has_question_meta：调用方是否传入了问题元数据。
+        # - True：按 category/题干 过滤自然问题；若全部为引导型，natural_results 为空，
+        #   此时提及率/TOP3推荐率分母为 0 → 指标置 0（与 database.py get_scores 口径一致），
+        #   绝不能把引导型问题塞进分母。
+        # - False：无元数据（旧调用兼容），全部有效响应视为自然问题。
+        has_question_meta = bool(question_map)
+        if has_question_meta:
+            natural_results = []
+            for r in valid_results:
+                q = question_map.get(r.question_id, {})
+                question_text = q.get("question", "")
+                category = q.get("category", "")
+                if _is_natural_question(question_text, category):
+                    natural_results.append(r)
+        else:
+            natural_results = valid_results
+        natural_count = len(natural_results)
 
         # ---- 提及率（coverage_rate）----
-        # 分母：自然问题数
+        # 分母：自然问题数；自然问题为 0 时置 0（不拿引导型兜底）
         # 分子：UCloud被提及的自然问题数
-        if natural_results:
+        if natural_count:
             mentioned_count = sum(1 for r in natural_results if r.ucloud_mentioned)
             scores.coverage_rate = round(mentioned_count / natural_count, 4)
         else:
-            mentioned_count = sum(1 for r in valid_results if r.ucloud_mentioned)
-            scores.coverage_rate = round(mentioned_count / len(valid_results), 4)
+            scores.coverage_rate = 0.0
 
         # ---- 原提及率（mention_rate，不参与GEO得分）----
         weighted_mentions = []
@@ -180,9 +187,9 @@ class MetricsCalculator:
         scores.citation_rate = round(cited_count / len(valid_results), 4)
 
         # ---- TOP3推荐率 ----
-        # 分母：自然问题数
+        # 分母：自然问题数；自然问题为 0 时置 0（不拿引导型兜底）
         # 分子：UCloud排名≤3的自然问题数
-        if natural_results:
+        if natural_count:
             top3_count = sum(
                 1 for r in natural_results
                 if r.ucloud_rank is not None and r.ucloud_rank <= 3
@@ -200,11 +207,9 @@ class MetricsCalculator:
             scores.strong_recommend_rate = round(strong_count / natural_count, 4)
             scores.moderate_recommend_rate = round(moderate_count / natural_count, 4)
         else:
-            top3_count = sum(
-                1 for r in valid_results
-                if r.ucloud_rank is not None and r.ucloud_rank <= 3
-            )
-            scores.recommendation_rate = round(top3_count / len(valid_results), 4)
+            scores.recommendation_rate = 0.0
+            scores.strong_recommend_rate = 0.0
+            scores.moderate_recommend_rate = 0.0
 
         # ---- 情感值 ----
         # 分母：全部有效问题

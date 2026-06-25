@@ -924,10 +924,12 @@ class ErnieWebChatClient(WebChatClientBase):
         "button[aria-label*='发送'], button[aria-label*='Send'], "
         "button[class*='send']"
     )
-    # 回答容器：cosd-markdown-content 是最终答案区（流式输出时带 -typingall 后缀）
+    # 回答容器：cosd-markdown-content 是最终答案区（流式输出时带 -typingall 后缀）。
+    # 注意：只匹配 cosd-markdown-content / ai-markdown，不匹配裸 cosd-markdown——
+    # 后者在加载期会出现多个空骨架容器，.last 会命中空容器导致文本长度恒 0 →
+    # _wait_for_text_stability / _wait_until_no_progress_markers 120s 超时。
     RESPONSE_SELECTOR = (
         "[class*='cosd-markdown-content'], "
-        "[class*='cosd-markdown'], "
         "[class*='ai-markdown']"
     )
     NEW_CHAT_SELECTOR = (
@@ -1025,7 +1027,9 @@ class ErnieWebChatClient(WebChatClientBase):
             "(sel) => {"
             "  const els = document.querySelectorAll(sel);"
             "  if (!els.length) return '';"
-            "  return (els[els.length - 1]?.innerText || '');"
+            "  let best = '';"
+            "  for (const e of els) { const t = e.innerText || ''; if (t.length > best.length) best = t; }"
+            "  return best;"
             "}"
         )
         selector = self.RESPONSE_SELECTOR

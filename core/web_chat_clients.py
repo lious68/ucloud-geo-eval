@@ -1180,7 +1180,9 @@ class DoubaoWebChatClient(WebChatClientBase):
     RESPONSE_SELECTOR = (
         "[class*='message-content'], [class*='markdown'], "
         "[class*='response'], [class*='assistant'], "
-        "[role='article'], [class*='chat-message']"
+        "[role='article'], [class*='chat-message'], "
+        # 豆包新版 assistant 气泡：flex 行容器 + 次要文本色（用户消息用 s-color-text）
+        "[class*='s-color-text-secondary']"
     )
     # 扩展：豆包可能用的响应区域选择器
     RESPONSE_FALLBACKS = [
@@ -1217,6 +1219,8 @@ class DoubaoWebChatClient(WebChatClientBase):
 
     async def _type_question(self, page: Page, question: str):
         """在输入框中输入问题"""
+        # 保险：输入前再清一次推广弹窗（弹窗可能在输入时复现）
+        await self._dismiss_download_dialog(page)
         input_el = page.locator(self.INPUT_SELECTOR).first
         await input_el.wait_for(state="visible", timeout=10000)
         await input_el.click()
@@ -1227,25 +1231,13 @@ class DoubaoWebChatClient(WebChatClientBase):
         await page.keyboard.type(question, delay=30)
 
     async def _send_question(self, page: Page):
-        """发送问题"""
-        # 先尝试点击发送按钮（多种选择器回退）
-        try:
-            for selector in [
-                "button[aria-label='发送']",
-                "button[aria-label='Send']",
-                "[class*='send-btn']",
-                "[class*='send-button']",
-                "[data-testid='send-button']",
-            ]:
-                btn = page.locator(selector).first
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    logger.info("WebChat doubao: sent via button click")
-                    return
-        except Exception:
-            pass
+        """发送问题
 
-        # 回退 1: 聚焦输入框后按 Enter
+        doubao 当前版本的发送按钮无 aria-label='发送'，且 [class*='send'] 会误匹配
+        工具栏按钮（点击无响应 → 回答不生成）。实测在输入框聚焦状态下按 Enter
+        可靠发送，故改为 Enter 优先，按钮仅作精确命中的兜底。
+        """
+        # 主路径：聚焦输入框后按 Enter
         try:
             input_el = page.locator(self.INPUT_SELECTOR).first
             await input_el.click()
@@ -1256,7 +1248,22 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             pass
 
-        # 回退 2: 全局 Enter
+        # 兜底：仅点精确标注的发送按钮（避免 [class*='send'] 误匹配工具栏）
+        for selector in [
+            "button[aria-label='发送']",
+            "button[aria-label='Send']",
+            "[data-testid='send-button']",
+        ]:
+            try:
+                btn = page.locator(selector).first
+                if await btn.is_visible(timeout=2000):
+                    await btn.click()
+                    logger.info(f"WebChat doubao: sent via {selector}")
+                    return
+            except Exception:
+                pass
+
+        # 最后兜底：全局 Enter
         await page.keyboard.press("Enter")
         logger.info("WebChat doubao: sent via global Enter")
 
@@ -1385,11 +1392,16 @@ class DoubaoWebChatClient(WebChatClientBase):
                             if (parent.closest(exclude)) return NodeFilter.FILTER_REJECT;
                             if (parent.closest('nav, [role="sidebar"], [class*="sidebar"], [class*="left-side"], [class*="logo"], [class*="brand"]'))
                                 return NodeFilter.FILTER_REJECT;
+                            // 排除文件拖放区占位符（"在此处拖放文件"/"文件数量"/"文件类型"）
+                            if (parent.closest('[class*="dropzone"], [class*="file-input"], [class*="upload"]'))
+                                return NodeFilter.FILTER_REJECT;
                             const style = window.getComputedStyle(parent);
                             if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0)
                                 return NodeFilter.FILTER_REJECT;
                             const t = node.textContent.trim();
                             if (t.length < 3) return NodeFilter.FILTER_REJECT;
+                            if (/在此处拖放文件|文件数量|文件类型/.test(t))
+                                return NodeFilter.FILTER_REJECT;
                             return NodeFilter.FILTER_ACCEPT;
                         }
                     }
@@ -1457,6 +1469,33 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(5)
+        # 关闭"下载电脑版"推广弹窗（铺满拦截输入框点击）
+        await self._dismiss_download_dialog(page)
+
+    async def _dismiss_download_dialog(self, page: Page):
+        """关闭豆包"下载电脑版"推广弹窗。
+
+        豆包会弹出一个 radix dialog（role="dialog"，含"下载电脑版"文本）铺满页面，
+        拦截输入框点击 → click 超时。Esc 关不掉，需点其关闭按钮（aria-label="关闭"）
+        或"下次提醒我"。每次开新对话/导航后调用。
+        """
+        try:
+            dlg = page.locator("[role='dialog']:has-text('下载电脑版')")
+            if await dlg.count() == 0:
+                return
+            close = dlg.first.locator('[aria-label="关闭"]')
+            if await close.count():
+                await close.first.click()
+                await asyncio.sleep(0.6)
+                logger.info("WebChat doubao: 已关闭'下载电脑版'推广弹窗")
+                return
+            later = page.locator("button:has-text('下次提醒我')")
+            if await later.count():
+                await later.first.click()
+                await asyncio.sleep(0.6)
+                logger.info("WebChat doubao: 已'下次提醒我'关闭推广弹窗")
+        except Exception as e:
+            logger.debug(f"WebChat doubao: 关闭推广弹窗跳过: {e}")
 
 
 class QwenWebChatClient(WebChatClientBase):

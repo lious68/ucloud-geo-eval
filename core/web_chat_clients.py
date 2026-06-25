@@ -901,32 +901,39 @@ class DeepSeekWebChatClient(WebChatClientBase):
 
 
 class ErnieWebChatClient(WebChatClientBase):
-    """文心一言 (yiyan.baidu.com) WebChat 客户端
+    """文心一言 (chat.baidu.com) WebChat 客户端
 
     百度的 AI 聊天平台，支持联网搜索和深度思考。
+    2026-06-25 起 yiyan.baidu.com 停服，入口迁移到 chat.baidu.com（百度文心助手）。
+    新页面输入框为 textarea.ci-textarea，回答区为 cosd-markdown-content。
     Baidu 使用哈希化的 CSS 类名（如 editable__T7WAW4uW），
     因此选择器以结构/语义属性为主，辅以类名模式匹配。
     """
 
-    # ── 文心一言选择器 ──
+    CHAT_URL = "https://chat.baidu.com/"
+
+    # ── 文心一言选择器（chat.baidu.com 新版）──
+    # 输入框：textarea.ci-textarea（class 含 ci-textarea），兜底 chat-input 容器内 textarea
     INPUT_SELECTOR = (
-        "[contenteditable='true'], "
-        "[class*='editable'], "
-        "[class*='input-area'], textarea"
+        "textarea[class*='ci-textarea'], "
+        "textarea[class*='chat-input'], "
+        "[class*='chat-input-box'] textarea, "
+        "textarea"
     )
     SEND_SELECTOR = (
         "button[aria-label*='发送'], button[aria-label*='Send'], "
         "button[class*='send']"
     )
-    # 回答容器：answerBox 是最终输出区域（含思考+答案）
+    # 回答容器：cosd-markdown-content 是最终答案区（流式输出时带 -typingall 后缀）
     RESPONSE_SELECTOR = (
-        "[class*='answerBox'], "
-        "[class*='answer']"
+        "[class*='cosd-markdown-content'], "
+        "[class*='cosd-markdown'], "
+        "[class*='ai-markdown']"
     )
     NEW_CHAT_SELECTOR = (
         "button[aria-label*='新建'], "
         "a[href*='new'], "
-        "[class*='new-chat'], [class*='create'], "
+        "[class*='new-chat'], [class*='new-dialog'], [class*='create'], "
         "button[class*='new']"
     )
     SEARCH_TOGGLE_SELECTOR = (
@@ -957,8 +964,8 @@ class ErnieWebChatClient(WebChatClientBase):
             return False
 
     async def _navigate_to_chat(self, page: Page):
-        """导航到文心一言"""
-        await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+        """导航到文心一言（chat.baidu.com 新入口）"""
+        await page.goto(self.CHAT_URL, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
 
     async def _type_question(self, page: Page, question: str):
@@ -981,37 +988,33 @@ class ErnieWebChatClient(WebChatClientBase):
             await page.keyboard.press("Enter")
 
     async def _wait_for_response(self, page: Page, timeout: int = 180):
-        """等待文心一言响应完成
+        """等待文心一言（chat.baidu.com）响应完成
 
-        文心一言有"深度思考"模式：先流式输出"正在思考中"+思维链（可见但非最终答案），
-        再出最终答案。完成判定按 answerBox 正文内容——不再依赖 CSS 选择器（文心类名
-        哈希化如 editable__T7WAW4uW，[class*='thinking'] 匹配不到 → is_visible 直接
-        False → 旧逻辑跳过等待思考结束）。
+        新版 chat.baidu.com 回答区为 cosd-markdown-content，流式输出时类名带
+        cosd-markdown-content-typingall 后缀；输出完成该后缀消失。
+        完成判定：回答区可见 + 不再含进行中标记 + 文本稳定。
 
-        证据：output/webchat_task3_20260620_222419.json 的 q17/q18 在思考停顿期
-        被 _wait_for_text_stability 误判稳定、提前返回半截"正在思考中...买到高"。
-        策略：先轮询直到正文不再含进行中标记 → 再做文本稳定性确认（最终答案稳定）。
+        旧 yiyan 版的"深度思考/准备输出结果"分隔线在新版不再出现，改为按
+        markdown 内容稳定性判定。保留 progress marker 轮询以兼容思考/搜索阶段。
         """
         # 等待回答区域出现
         try:
-            resp_area = page.locator("[class*='answerBox'], [class*='answer']").last
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
             await resp_area.wait_for(state="visible", timeout=30000)
         except Exception:
             await asyncio.sleep(10)
 
-        # ── 阶段1：等深度思考结束（内容判定，不靠 CSS 选择器）──
-        # 进行中标记：思考中/搜索中/生成中等。正文含任一即继续等。
-        # 这些是 UI 渲染在 answerBox 里的可见提示，不是最终答案的一部分。
+        # ── 阶段1：等深度思考/搜索结束（内容判定，不靠 CSS 选择器）──
         await self._wait_until_no_progress_markers(page, timeout=timeout)
 
-        # ── 阶段2：最终答案文本稳定（思考结束后答案仍在流式增长，需等其稳定）──
+        # ── 阶段2：最终答案文本稳定（流式输出结束后文本不再增长）──
         await self._wait_for_text_stability(
-            page, "[class*='answerBox'], [class*='answer']", timeout=timeout
+            page, self.RESPONSE_SELECTOR, timeout=timeout
         )
 
     async def _wait_until_no_progress_markers(self, page: Page, timeout: int = 180,
                                                interval: int = 2) -> bool:
-        """轮询 answerBox 正文，直到不含"进行中"标记（正在思考中/搜索中/生成中...）。
+        """轮询回答区正文，直到不含"进行中"标记（正在思考中/搜索中/生成中...）。
 
         思考阶段正文会反复出现这些标记；标记全部消失后才进入最终答案阶段。
         单独成阶段：思考停顿期文本长度可能暂时不变（_wait_for_text_stability 会误判），
@@ -1025,7 +1028,7 @@ class ErnieWebChatClient(WebChatClientBase):
             "  return (els[els.length - 1]?.innerText || '');"
             "}"
         )
-        selector = "[class*='answerBox'], [class*='answer']"
+        selector = self.RESPONSE_SELECTOR
         markers = ("正在思考", "思考中", "搜索中", "生成中", "正在搜索", "正在生成")
         elapsed = 0
         while elapsed < timeout:
@@ -1042,35 +1045,26 @@ class ErnieWebChatClient(WebChatClientBase):
         return False
 
     async def _extract_response(self, page: Page) -> str:
-        """提取文心一言响应文本
+        """提取文心一言（chat.baidu.com）响应文本
 
-        文心一言的回答区域包含"深度思考"过程和最终答案。
-        需要过滤掉思考过程的文本，只保留最终答案。
+        新版回答区为 cosd-markdown-content，直接取其 innerText。
+        旧版 answerBox 的"准备输出结果/思考完成"分隔线逻辑保留作兜底。
         """
         try:
-            answer_box = page.locator("[class*='answerBox'], [class*='answer']").last
+            answer_box = page.locator(self.RESPONSE_SELECTOR).last
             await answer_box.wait_for(state="visible", timeout=10000)
         except Exception:
             return ""
 
-        # 提取最终答案：获取最后一个 agent-markdown 的内容
-        # 文心一言的 answerBox 结构：
-        #   - 思考过程（第一个 agent-markdown）
-        #   - "准备输出结果" 分隔线
-        #   - 最终答案文本
         text = await answer_box.evaluate("""el => {
-            // 尝试获取最终答案文本
-            // 思考过程在 agent-markdown 元素中，最终答案在它们之后
             const allText = el.innerText || '';
 
-            // 如果有"准备输出结果"分隔线，取其之后的内容
+            // 旧版 yiyan 分隔线兜底（新版一般不出现，命中则取其后）
             const marker = '准备输出结果';
             const idx = allText.lastIndexOf(marker);
             if (idx !== -1) {
                 return allText.substring(idx + marker.length).trim();
             }
-
-            // 如果有"思考完成"分隔线，取其之后的内容
             const thinkMarker = '思考完成';
             const thinkIdx = allText.lastIndexOf(thinkMarker);
             if (thinkIdx !== -1) {
@@ -1081,7 +1075,7 @@ class ErnieWebChatClient(WebChatClientBase):
             return allText;
         }""")
 
-        # 提取链接（从整个 answerBox 中获取）
+        # 提取链接（从整个回答区中获取）
         links = await answer_box.evaluate("""
             el => {
                 const links = el.querySelectorAll('a[href]');
@@ -1115,11 +1109,52 @@ class ErnieWebChatClient(WebChatClientBase):
                 await new_btn.click()
                 await asyncio.sleep(2)
             else:
-                await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+                await page.goto(self.CHAT_URL, wait_until="domcontentloaded", timeout=30000)
                 await asyncio.sleep(3)
         except Exception:
-            await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+            await page.goto(self.CHAT_URL, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
+        # chat.baidu.com 默认选中 DeepSeek，需切到文心模型
+        await self._ensure_ernie_model(page)
+
+    async def _ensure_ernie_model(self, page: Page):
+        """确保当前选中"文心"模型（chat.baidu.com 默认 DeepSeek-V4 Pro）。
+
+        机制：.model-select-toggle（右侧 chevron）打开 .ci-popover 下拉，
+        选项为 .ci-capsules-model-list-item，其 title (.ci-capsules-model-list-item-title)
+        含模型名（文心 5.1 / DeepSeek-V4 Pro / DeepSeek-V4 Flash / DeepSeek-R1）。
+        当前选中模型显示在 .target-model-label。
+        用 label 检查做自校正：新对话若把模型重置回 DeepSeek，下次会自动切回文心。
+        """
+        try:
+            label = page.locator(".target-model-label").first
+            if await label.count():
+                cur = (await label.inner_text()).strip()
+                if "文心" in cur:
+                    return  # 已是文心，无需切换
+            # 打开模型下拉
+            toggle = page.locator(".model-select-toggle").first
+            await toggle.wait_for(state="visible", timeout=8000)
+            await toggle.click()
+            # 等下拉选项出现
+            item = page.locator(
+                ".ci-capsules-model-list-item:has-text('文心')"
+            ).first
+            await item.wait_for(state="visible", timeout=8000)
+            await asyncio.sleep(0.3)
+            await item.click()
+            await asyncio.sleep(1.0)
+            # 校验切换成功
+            try:
+                after = (await page.locator(".target-model-label").first.inner_text()).strip()
+                if "文心" in after:
+                    logger.info(f"WebChat {self.model_key}: 已切换到文心模型 ({after})")
+                else:
+                    logger.warning(f"WebChat {self.model_key}: 模型切换后 label={after!r}，未含'文心'")
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"WebChat {self.model_key}: 切换文心模型失败（继续用默认）: {e}")
 
 
 class DoubaoWebChatClient(WebChatClientBase):

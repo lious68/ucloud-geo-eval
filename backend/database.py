@@ -1220,6 +1220,67 @@ async def delete_task_geo_scores(task_id: str):
         await db.close()
 
 
+async def mirror_task_runs(task_id: str) -> int:
+    """把 task 的评测镜像到 evaluation_runs，让「历史评测情况」页可显示。
+
+    对 task 每个 distinct run_id（每个导入批次一行）upsert 一行 evaluation_runs，
+    并把 task 维度的 geo_scores 复制一份到 run_id 维度（History 页的
+    /results/{run_id}/scores 走 geo_scores WHERE run_id=? 查询）。
+
+    Dashboard 的 viewResult 跳 ?run_id=run_id，无需改前端。多批次 task 在历史页
+    呈多行（每批次一行），符合「每次评测一条记录」语义。重复导入幂等。
+    """
+    db = await get_db()
+    try:
+        t = await db.execute(
+            "SELECT id, name, question_ids, created_at FROM tasks WHERE id=?", (task_id,))
+        trow = [dict(r) for r in await t.fetchall()]
+        if not trow:
+            return 0
+        t = trow[0]
+        qids = json.loads(t["question_ids"]) if t["question_ids"] else []
+        cur = await db.execute(
+            "SELECT DISTINCT model_key FROM analysis_results WHERE task_id=?", (task_id,))
+        models = [r["model_key"] for r in await cur.fetchall()]
+        cur = await db.execute(
+            "SELECT DISTINCT run_id FROM analysis_results WHERE task_id=? AND run_id IS NOT NULL",
+            (task_id,))
+        run_ids = [r["run_id"] for r in await cur.fetchall()]
+        inserted = 0
+        for rid in run_ids:
+            cur = await db.execute(
+                "SELECT batch_id FROM analysis_results WHERE task_id=? AND run_id=? LIMIT 1",
+                (task_id, rid))
+            b = [dict(r) for r in await cur.fetchall()]
+            batch_id = b[0]["batch_id"] if b and b[0].get("batch_id") else None
+            cur = await db.execute(
+                """INSERT OR IGNORE INTO evaluation_runs
+                   (id, name, status, model_keys, question_ids, total_questions,
+                    completed_questions, started_at, completed_at, config, mode,
+                    task_id, batch_id)
+                   VALUES (?, ?, 'completed', ?, ?, ?, ?, ?, ?, '{}', 'webchat', ?, ?)""",
+                (rid, t["name"], json.dumps(models), json.dumps(qids),
+                 len(qids), len(qids), t["created_at"], t["created_at"],
+                 task_id, batch_id))
+            inserted += cur.rowcount
+            # 清掉旧 run_id 维度 scores（重复导入幂等），从 task 维度复制
+            await db.execute("DELETE FROM geo_scores WHERE run_id=?", (rid,))
+            await db.execute(
+                """INSERT INTO geo_scores
+                   (run_id, model_key, model_name, category, geo_score, coverage_rate,
+                    mention_rate, citation_rate, recommendation_rate, sentiment_score,
+                    avg_rank, total_questions, valid_responses, task_id)
+                   SELECT ?, model_key, model_name, category, geo_score, coverage_rate,
+                          mention_rate, citation_rate, recommendation_rate, sentiment_score,
+                          avg_rank, total_questions, valid_responses, task_id
+                   FROM geo_scores WHERE task_id=?""",
+                (rid, task_id))
+        await db.commit()
+        return inserted
+    finally:
+        await db.close()
+
+
 async def save_task_geo_scores(task_id: str, model_key: str, model_name: str,
                                category: Optional[str], scores: Dict):
     db = await get_db()

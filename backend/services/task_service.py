@@ -223,6 +223,14 @@ async def recalculate_task_scores(task_id: str) -> None:
             )
             await db.save_task_geo_scores(task_id, mk, model_name, cat, _scores_to_dict(cat_scores))
 
+    # 镜像 task 评测到 evaluation_runs，让「历史评测情况」页可显示。
+    # 幂等：重复导入会清旧 run_id scores 再覆盖。失败不影响导入主流程。
+    try:
+        await db.mirror_task_runs(task_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"mirror_task_runs({task_id}) failed: {e}")
+
 
 def _result_to_analysis(r: Dict):
     return AnalysisResult(

@@ -157,7 +157,12 @@ async function loadRuns() {
     for (const run of runs.value) {
       if (run.status === 'completed') {
         try {
-          const scoresRes = await apiFetch(`/results/${run.id}/scores`)
+          // 镜像行（task 模式）走 task_id 维度，与「执行评测」同一接口同一口径，
+          // 避免与 get_scores 动态重算口径不一致导致 GEO 综合分偏差。
+          const scoresUrl = run.task_id
+            ? `/results/0/scores?task_id=${encodeURIComponent(run.task_id)}`
+            : `/results/${run.id}/scores`
+          const scoresRes = await apiFetch(scoresUrl)
           const scores = scoresRes.data || []
           if (scores.length) {
             // 各渠道指标取平均，再按权重计算综合得分

@@ -1263,7 +1263,10 @@ async def mirror_task_runs(task_id: str) -> int:
                  len(qids), len(qids), t["created_at"], t["created_at"],
                  task_id, batch_id))
             inserted += cur.rowcount
-            # 清掉旧 run_id 维度 scores（重复导入幂等），从 task 维度复制
+            # 清掉旧 run_id 维度 scores（重复导入幂等），从 task 维度复制。
+            # 关键：复制时 task_id 置 NULL——run_id 维度的行不能带 task_id，否则
+            # get_task_scores（WHERE task_id=?）会把它们和 task 维度行一起算 →
+            # 重复计数，仪表盘指标被稀释（如引用率 9.5% 被算成更低）。
             await db.execute("DELETE FROM geo_scores WHERE run_id=?", (rid,))
             await db.execute(
                 """INSERT INTO geo_scores
@@ -1272,7 +1275,7 @@ async def mirror_task_runs(task_id: str) -> int:
                     avg_rank, total_questions, valid_responses, task_id)
                    SELECT ?, model_key, model_name, category, geo_score, coverage_rate,
                           mention_rate, citation_rate, recommendation_rate, sentiment_score,
-                          avg_rank, total_questions, valid_responses, task_id
+                          avg_rank, total_questions, valid_responses, NULL
                    FROM geo_scores WHERE task_id=?""",
                 (rid, task_id))
         await db.commit()

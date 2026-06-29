@@ -240,7 +240,14 @@ function renderMetricTrendCharts() {
 }
 
 function viewResult(runId) {
-  router.push({ path: '/dashboard', query: { run_id: runId } })
+  // 兼容 task 模式镜像行：evaluation_runs.task_id 非空时走 task_id 路径，
+  // 与「执行评测」页的「查看结果」一致（同一 Dashboard，task 模式口径）。
+  const run = runs.value.find(r => r.id === runId)
+  if (run && run.task_id) {
+    router.push({ path: '/dashboard', query: { task_id: run.task_id } })
+  } else {
+    router.push({ path: '/dashboard', query: { run_id: runId } })
+  }
 }
 
 async function deleteRun(runId) {

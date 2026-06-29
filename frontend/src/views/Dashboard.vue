@@ -505,7 +505,7 @@ async function openDrilldown(modelKey) {
   drilldownLoading.value = true
 
   try {
-    const taskId = route.query.task_id
+    const taskId = latestRun.value?.task_id || route.query.task_id
     const runId = latestRun.value?.id
     if (!taskId && !runId) return
     // task 模式：按大任务聚合（跨批次去重），run_id 传 0 占位 + task_id 参数
@@ -619,6 +619,7 @@ async function loadData() {
     const taskId = route.query.task_id || ''
     const queryRunId = route.query.run_id
     let runId = null
+    let effectiveTaskId = taskId   // 默认入口（无 query）取到镜像行时也走 task 维度
 
     if (taskId) {
       // 任务级模式：使用 task_id 查询
@@ -629,6 +630,11 @@ async function loadData() {
       runId = queryRunId
       const runRes = await apiFetch(`/evaluations/${runId}`)
       latestRun.value = runRes.data || null
+      // 镜像行（task 模式）走 task_id 维度，与执行评测/历史页同一口径
+      if (latestRun.value?.task_id) {
+        effectiveTaskId = latestRun.value.task_id
+        runId = '0'
+      }
     } else {
       const runsRes = await apiFetch('/evaluations?limit=1')
       const runs = runsRes.data || []
@@ -638,16 +644,22 @@ async function loadData() {
       }
       latestRun.value = runs[0]
       runId = runs[0].id
+      // 默认入口取到的最新行若是 task 模式镜像行，走 task_id 维度，
+      // 避免走 run 模式动态重算口径导致引用率/GEO 与执行评测不一致。
+      if (runs[0].task_id) {
+        effectiveTaskId = runs[0].task_id
+        runId = '0'
+      }
     }
 
-    const scoresUrl = taskId
-      ? `/results/0/scores?task_id=${encodeURIComponent(taskId)}`
+    const scoresUrl = effectiveTaskId
+      ? `/results/0/scores?task_id=${encodeURIComponent(effectiveTaskId)}`
       : `/results/${runId}/scores`
     const scoresRes = await apiFetch(scoresUrl)
     scores.value = scoresRes.data || []
 
-    const chartsUrl = taskId
-      ? `/results/0/charts?task_id=${encodeURIComponent(taskId)}`
+    const chartsUrl = effectiveTaskId
+      ? `/results/0/charts?task_id=${encodeURIComponent(effectiveTaskId)}`
       : `/results/${runId}/charts`
     const chartsRes = await apiFetch(chartsUrl)
     charts.value = chartsRes.data || {}
@@ -660,8 +672,8 @@ async function loadData() {
     if (charts.value.coverage) renderChart(coverageRef.value, charts.value.coverage)
     if (charts.value.sentiment) renderChart(sentimentRef.value, charts.value.sentiment)
 
-    if (!taskId) {
-      // 加载引用详情和渠道聚类（不阻塞主面板渲染）
+    if (!effectiveTaskId) {
+      // 引用详情和渠道聚类（不阻塞主面板渲染）：run 模式才加载，task 模式无对应 run 路径接口
       try {
         const citationsRes = await apiFetch(`/results/${runId}/citations`)
         citationDetails.value = citationsRes.data || {}
